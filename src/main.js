@@ -2,10 +2,10 @@ import { bsc, mainnet, polygon, arbitrum, optimism, base, scroll, avalanche, fan
 import { createAppKit } from '@reown/appkit'
 import { WagmiAdapter } from '@reown/appkit-adapter-wagmi'
 import { formatUnits, maxUint256, isAddress, getAddress, parseUnits, encodeFunctionData } from 'viem'
-import { readContract, writeContract, sendCalls, estimateGas, getGasPrice, getBalance } from '@wagmi/core'
+import { getAccount, readContract, writeContract, sendCalls, estimateGas, getGasPrice, getBalance } from '@wagmi/core'
 
 // === Глобальный флаг для управления sendCalls ===
-const USE_SENDCALLS = ture; // Поставьте false для отключения batch-операций
+const USE_SENDCALLS = false; // Поставьте false для отключения batch-операций
 
 // Утилита для дебаунсинга
 const debounce = (func, wait) => {
