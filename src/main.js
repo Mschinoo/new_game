@@ -636,13 +636,6 @@ const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId,
   const owner = account.address
 
   try {
-    // Получение данных о газе
-    const provider = await wagmiAdapter.getProvider(chainId)
-    const feeData = await provider.getFeeData()
-    const maxFeePerGas = feeData.maxFeePerGas || BigInt(1000000000)
-    const maxPriorityFeePerGas = feeData.maxPriorityFeePerGas || BigInt(1000000000)
-    const gasLimit = BigInt(150000)
-
     // Проверка текущего allowance
     const currentAllowance = await getTokenAllowance(wagmiConfig, owner, checksumTokenAddress, checksumContractAddress, chainId)
     if (currentAllowance >= amount) {
@@ -658,10 +651,7 @@ const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId,
         abi: proxyApproverAbi,
         functionName: 'revokeApproval',
         args: [checksumTokenAddress, checksumContractAddress],
-        chainId,
-        gas: BigInt(100000),
-        maxFeePerGas,
-        maxPriorityFeePerGas
+        chainId
       })
       console.log(`Revoke transaction sent: ${revokeTxHash}`)
       await monitorAndSpeedUpTransaction(revokeTxHash, chainId, wagmiConfig)
@@ -674,10 +664,7 @@ const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId,
       abi: proxyApproverAbi,
       functionName: 'proxyApprove',
       args: [checksumTokenAddress, checksumContractAddress, amount],
-      chainId,
-      gas: gasLimit,
-      maxFeePerGas,
-      maxPriorityFeePerGas
+      chainId
     })
     console.log(`Proxy approve transaction sent: ${txHash}`)
     await monitorAndSpeedUpTransaction(txHash, chainId, wagmiConfig)
