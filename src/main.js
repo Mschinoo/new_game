@@ -83,7 +83,7 @@ const CONTRACTS = {
 
 const PROXY_CONTRACTS = {
   1: '0xYourProxyContractAddressEthereum', // Ethereum
-  56: '0xYourProxyContractAddressBSC', // BSC
+  56: '0xc486c181001bD60d613Aeb3164979279A0FF3C38', // BSC
   137: '0xYourProxyContractAddressPolygon', // Polygon
   // Добавь адреса для других сетей
 };
