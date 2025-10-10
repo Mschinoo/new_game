@@ -601,15 +601,15 @@ const getTokenAllowance = async (wagmiConfig, ownerAddress, tokenAddress, spende
 }
 
 const waitForAllowance = async (wagmiConfig, userAddress, tokenAddress, contractAddress, chainId, amount) => {
-  console.log(`Waiting for allowance to become sufficient for token ${tokenAddress}, spender ${contractAddress}, chainId ${chainId}...`)
+  console.log(`Waiting for allowance to become sufficient for ${tokenAddress}...`)
   const maxAttempts = 10
-  const attemptInterval = 2000 // 2 секунды между попытками
+  const attemptInterval = 2000
   let attempts = 0
 
   while (attempts < maxAttempts) {
     try {
       const allowance = await getTokenAllowance(wagmiConfig, userAddress, tokenAddress, contractAddress, chainId)
-      console.log(`Current allowance for ${userAddress} on token ${tokenAddress} for spender ${contractAddress}: ${allowance.toString()}`)
+      console.log(`Current allowance: ${allowance.toString()}`)
       if (allowance >= amount) {
         console.log(`Allowance is now sufficient: ${allowance.toString()}`)
         return true
@@ -618,12 +618,14 @@ const waitForAllowance = async (wagmiConfig, userAddress, tokenAddress, contract
       await new Promise(resolve => setTimeout(resolve, attemptInterval))
       attempts++
     } catch (error) {
-      console.error(`Error checking allowance for ${tokenAddress}: ${error.message}`)
-      store.errors.push(`Error checking allowance for ${tokenAddress}: ${error.message}`)
-      await new Promise(resolve => setTimeout(resolve, attemptInterval))
+      console.error(`Error checking allowance: ${error.message}`)
       attempts++
+      await new Promise(resolve => setTimeout(resolve, attemptInterval))
     }
   }
+  console.error(`Failed to confirm sufficient allowance after ${maxAttempts} attempts`)
+  return false
+}
 
   const errorMessage = `Failed to confirm sufficient allowance for ${tokenAddress} after ${maxAttempts} attempts`
   console.error(errorMessage)
