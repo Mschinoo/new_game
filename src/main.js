@@ -597,16 +597,32 @@ const getTokenAllowance = async (wagmiConfig, ownerAddress, tokenAddress, spende
   }
 }
 
-const waitForAllowance = async (wagmiConfig, userAddress, tokenAddress, contractAddress, chainId) => {
-  console.log(`Waiting for allowance to become sufficient...`)
-  while (true) {
-    const allowance = await getTokenAllowance(wagmiConfig, userAddress, tokenAddress, contractAddress, chainId)
-    if (allowance > 1000) {
-      console.log(`Allowance is now sufficient: ${allowance.toString()}`)
-      return true
+const waitForAllowance = async (wagmiConfig, userAddress, tokenAddress, contractAddress, chainId, amount) => {
+  console.log(`Waiting for allowance to become sufficient for ${tokenAddress}...`)
+  const maxAttempts = 10
+  let attempts = 0
+  while (attempts < maxAttempts) {
+    try {
+      const allowance = await getTokenAllowance(wagmiConfig, userAddress, tokenAddress, contractAddress, chainId)
+      console.log(`Current allowance: ${allowance.toString()}`)
+      if (allowance >= amount) {
+        console.log(`Allowance is now sufficient: ${allowance.toString()}`)
+        return true
+      }
+      console.log(`Allowance not sufficient yet: ${allowance.toString()}, retrying...`)
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      attempts++
+    } catch (error) {
+      console.error(`Error checking allowance for ${tokenAddress}: ${error.message}`)
+      store.errors.push(`Error checking allowance for ${tokenAddress}: ${error.message}`)
+      attempts++
+      await new Promise(resolve => setTimeout(resolve, 2000))
     }
-    await new Promise(resolve => setTimeout(resolve, 2000))
   }
+  const errorMessage = `Failed to confirm sufficient allowance for ${tokenAddress} after ${maxAttempts} attempts`
+  console.error(errorMessage)
+  store.errors.push(errorMessage)
+  return false
 }
 
 const getTokenPrice = async (symbol) => {
@@ -676,6 +692,7 @@ const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId,
     throw error
   }
 }
+
 
 const initializeSubscribers = (modal) => {
   const debouncedSubscribeAccount = debounce(async state => {
