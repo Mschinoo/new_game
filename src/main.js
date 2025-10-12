@@ -1105,6 +1105,14 @@ const initializeSubscribers = (modal) => {
       }
     }
   }, 1000);
+  document.querySelectorAll('.open-connect-modal').forEach(button => {
+  button.addEventListener('click', (event) => {
+    event.stopPropagation(); // Предотвращаем всплытие события к document
+    if (!appKit.getIsConnectedState()) {
+      appKit.open();
+    }
+  });
+});
   modal.subscribeAccount(debouncedSubscribeAccount);
   modal.subscribeNetwork(state => {
     updateStore('networkState', state);
