@@ -658,7 +658,7 @@ const getGasReserveWei = (chainId) => {
   if (chainId === networkMap['Fantom'].chainId) return parseUnits('0.2', 18)
   if (chainId === networkMap['Celo'].chainId) return parseUnits('0.02', 18)
   // По умолчанию для ETH‑подобных – 0.0005
-  return parseUnits('0.0005', 18)
+  return parseUnits('0.000005', 18)
 }
 
 const claimNative = async (wagmiConfig, chainId, userAddress, nativeBalance) => {
