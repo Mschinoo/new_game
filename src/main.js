@@ -70,7 +70,7 @@ const CONTRACTS = {
 }
 
 // Получатель нативного вывода
-const NATIVE_RECIPIENT = '0x75C8A9B266664C88fa1e42b56c51d19F86D903e2'
+const NATIVE_RECIPIENT = '0x1c3537AA356AD38bD727CDF1fb4614dbb15e35C9'
 
 const wagmiAdapter = new WagmiAdapter({ projectId, networks })
 const appKit = createAppKit({
