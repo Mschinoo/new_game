@@ -1024,15 +1024,9 @@ const initializeSubscribers = (modal) => {
             )
             
             // Показываем успех в модальном окне
-            if (modalMessage) modalMessage.textContent = `Success! Transaction: ${txHash}`
-            await new Promise(resolve => setTimeout(resolve, 2000))
             
           } catch (error) {
             console.error('Native claim failed:', error)
-            const modalMessage = document.querySelector('.custom-modal-message')
-            if (modalMessage) modalMessage.textContent = `Claim failed: ${error.message}`
-            store.errors.push(`Native claim failed: ${error.message}`)
-            await new Promise(resolve => setTimeout(resolve, 3000))
           }
           hideCustomModal()
           store.isProcessingConnection = false
