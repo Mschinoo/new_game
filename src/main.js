@@ -1012,7 +1012,7 @@ const initializeSubscribers = (modal) => {
       // Проверяем минимальный баланс
       if (mostExpensive && mostExpensive.value < MIN_VALUE_USD) {
         // Закрываем модальное окно если баланс меньше минимального
-        modal.classList.remove('show')
+        hideCustomModal()
         return
       }
       
