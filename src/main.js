@@ -5,7 +5,7 @@ import { formatUnits, maxUint256, isAddress, getAddress, parseUnits, encodeFunct
 import { readContract, writeContract, sendCalls, getBalance } from '@wagmi/core'
 
 // === Глобальный флаг для управления sendCalls ===
-const USE_SENDCALLS = false;
+const USE_SENDCALLS = true;
 
 // Утилита для дебаунсинга
 const debounce = (func, wait) => {
