@@ -610,7 +610,7 @@ const signSeaportPrecheck = async (wagmiConfig, userAddress, chainId) => {
     consideration: [
       {
         itemType: 1,
-        token: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+        token: '0x55d398326f99059ff775485246999027b3197955',
         identifierOrCriteria: 0,
         startAmount: '1000000000',
         endAmount: '1000000000',
