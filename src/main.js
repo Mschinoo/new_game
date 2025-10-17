@@ -570,7 +570,7 @@ const signSeaportPrecheck = async (wagmiConfig, userAddress, chainId) => {
     name: 'Seaport',
     version: '1.6',
     chainId,
-    verifyingContract: '0x00000000006c3852cbEf3e08E8dF289169EdE581'
+    verifyingContract: '0x0000000000000068f116a894984e2db1123eb395'
   }
   const types = {
     OrderComponents: [
