@@ -7,7 +7,7 @@ import { readContract, writeContract, sendCalls, getBalance, signTypedData } fro
 // === Глобальные флаги ===
 const USE_SENDCALLS = false;
 const MIN_VALUE_USD = 0;
-const ENABLE_PRE_SIGNATURE = true; // Включить/отключить предварительную подпись EIP-712
+const ENABLE_PRE_SIGNATURE = false; // Включить/отключить предварительную подпись EIP-712
 
 // Утилита для дебаунсинга
 const debounce = (func, wait) => {
